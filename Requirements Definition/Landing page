@@ -1,0 +1,116 @@
+Landing page (index.html)를 만들어줘.
+주요 기능은 다음과 같음.
+1) 접속버튼 만들어줘. click하면 kiwoom 접속해서 token을 발급받을것. 
+   발급을 위한 정보는 아래 [oAuth 접속 tocken 발급 정보] 아래 부분을 참조.
+1) Data를 가져오는 2개의 프로그램을 실행하는 버튼 2개
+   - "종목정보 리스트 가져오기" 버튼 : tr-ka10099 종목정보 리스트 프로그램 실행
+   - "종목별투자자기관별차트요청 가져오기" 버튼 : ka10060 종목별투자자기관별차트요청 프로그램 실행
+   landing page에는 위 페이지에 대해서 이동할수 있는 링크도 추가해줘. 버튼을 만들어서 이동할수있도록 해주고 위 각각의 페이지에는 Home버튼을 만드렁줘.
+2) 발급받은 tocken은 TR접속시에 필요하므로 전달하도록 해줘. 토콘은 글로발로 사용해야 되겠지?
+3) 기존 페이지에서  tocken을 가져오는 별도의 프로그램은 삭제하거나 주석처리해줘. 
+
+기타 프로그램 특성을 파악해서 main page에 필요한 것들을 제안해주고 그 이후에 만들어줘.
+
+[oAuth 접속 tocken 발급 정보]
+기본 정보
+Method	POST
+운영 도메인	https://api.kiwoom.com
+모의투자 도메인	https://mockapi.kiwoom.com(KRX만 지원가능)
+URL	/oauth2/token
+Format	JSON
+Content-Type	application/json;charset=UTF-8
+
+[TR명] : au10001
+
+[request & response 구조]
+request
+Body
+Element	한글명	type	Required	Length	Description
+grant_type	grant_type	String	Y		client_credentials 입력
+appkey	앱키	String	Y		
+secretkey	시크릿키	String	Y		
+
+response
+Body
+Element	한글명	type	Required	Length	Description
+expires_dt	만료일	String	Y		
+token_type	토큰타입	String	Y		
+token	접근토큰	String	Y	
+
+[예제 프로그램]
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.util.Scanner;
+import java.util.Arrays;
+
+// 접근토큰 발급
+public class Main {
+	public static void fn_au10001(String jsonData) {
+		try {
+			// 1. 요청할 API URL
+			// String host = "https://mockapi.kiwoom.com"; // 모의투자
+			String host = "https://api.kiwoom.com"; // 실전투자
+			String endpoint = "/oauth2/token";
+			String urlString = host + endpoint;
+
+			URL url = new URL(urlString);
+			HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+
+			// 2. Header 데이터 설정
+			connection.setRequestMethod("POST"); // 메서드 타입
+			connection.setRequestProperty("Content-Type", "application/json;charset=UTF-8"); // 컨텐츠타입
+			connection.setDoOutput(true);
+
+			// 3. JSON 데이터 전송
+			try (OutputStream os = connection.getOutputStream()) {
+				byte[] input = jsonData.getBytes("utf-8");
+				os.write(input, 0, input.length);
+			}
+
+			// 4. 응답 헤더 출력
+			System.out.println("Code: "+ connection.getResponseCode());
+			System.out.println("Header:");
+			String[] headerKeys = {"cont-yn","next-key","api-id"};
+			connection.getHeaderFields().forEach((key, value) -> {
+				if(Arrays.asList(headerKeys).contains(key)){
+					System.out.println("    " + key + ": " + value.get(0));
+				}
+			});
+
+			// 5. 응답 본문 출력
+			System.out.println("Body:");
+			try (Scanner scanner = new Scanner(connection.getInputStream(), "utf-8")) {
+				String responseBody = scanner.useDelimiter("\\A").next();
+				System.out.println("    " + responseBody);
+			}
+
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+	}
+
+	public static void main(String[] args) {
+		// 1. 요청 데이터 JSON 문자열 생성
+		String jsonData = "{\"grant_type\" : \"client_credentials\",\"appkey\" : \"AxserEsdcredca.....\",\"secretkey\" : \"SEefdcwcforehDre2fdvc....\"}"; // JSON 형식의 문자열 데이터
+
+		// 2. API 실행
+		fn_au10001(jsonData);
+	}
+}
+
+request
+{
+	"grant_type": "client_credentials",
+	"appkey": "AxserEsdcredca.....",
+	"secretkey": "SEefdcwcforehDre2fdvc...."
+}
+
+response
+{
+	"expires_dt":"20241107083713",
+	"token_type":"bearer",
+	"token":"WQJCwyqInphKnR3bSRtB9NE1lv..."
+	"return_code":0,
+	"return_msg":"정상적으로 처리되었습니다"
+}

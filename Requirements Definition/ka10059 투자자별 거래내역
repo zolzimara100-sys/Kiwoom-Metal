@@ -1,0 +1,63 @@
+
+TR명 ka10059	투자자별 거래내역
+
+
+[가이드] 키움증권 투자자별 거래내역(ka10059) DB 스키마 및 데이터 처리 지침
+이 가이드는 AI 에이전트에게 전달하여, PostgreSQL에 최적화된 테이블을 생성하고 결점 없는 데이터를 적재하는 코드를 작성하게 하는 것을 목표로 합니다.
+1. 데이터베이스 스키마 설계 (PostgreSQL DDL 가이드)
+단순히 API 응답을 저장하는 것을 넘어, 향후 SQL 분석 시 성능을 고려한 설계입니다.
+A. 테이블 명세
+## 1. Database Schema (PostgreSQL)
+- 테이블명: `tb_daily_investor_activities`
+- **Partitioning**: `dt` 컬럼 기준 Range Partitioning을 적용한 DDL을 작성할 것. (월 단위 파티션 예시 포함).
+- **Primary Key**: `stk_cd`, `dt`, `trde_tp`, `amt_qty_tp` 4개 컬럼의 복합키로 설정.
+- **Data Types**:
+  - 모든 금액/수량 컬럼(개인, 외국인, 기관 등)은 `BIGINT`로 설정.
+  - 등락률(`flu_rt`)은 소수점 저장을 위해 `NUMERIC(5,2)`로 설정.
+  - 일자(`dt`)는 `DATE` 타입.
+
+B. DDL Script (PostgreSQL)
+CREATE TABLE tb_stock_investor_daily (
+    -- 1. Primary Keys (데이터 식별자)
+    stk_cd          VARCHAR(10) NOT NULL,    -- [Request] 종목코드 (예: 005930)
+    dt              DATE        NOT NULL,    -- [Request/Response] 일자 (YYYY-MM-DD)
+    trde_tp         VARCHAR(1)  NOT NULL,    -- [Request] 매매구분 (0:순매수, 1:매수, 2:매도)
+    amt_qty_tp      VARCHAR(1)  NOT NULL,    -- [Request] 금액수량구분 (1:금액, 2:수량)
+
+    -- 2. Request Metadata (데이터 속성)
+    unit_tp         VARCHAR(4)  NOT NULL,    -- [Request] 단위구분 (1:단주, 1000:천주) - 원본 데이터 단위 기록용
+
+    -- 3. Market Data (시세 및 거래 정보 - Response Body)
+    cur_prc         BIGINT,                  -- [Response] 현재가 (부호 제거됨)
+    pre_sig         VARCHAR(1),              -- [Response] 대비기호 (1:상한, 2:상승 등)
+    pred_pre        BIGINT,                  -- [Response] 전일대비
+    flu_rt          NUMERIC(5, 2),           -- [Response] 등락율 (예: 6.98)
+    acc_trde_qty    BIGINT,                  -- [Response] 누적거래량
+    acc_trde_prica  BIGINT,                  -- [Response] 누적거래대금
+
+    -- 4. Investor Breakdown (투자자별 수치 - Response Body)
+    ind_invsr       BIGINT DEFAULT 0,        -- [Response] 개인투자자
+    frgnr_invsr     BIGINT DEFAULT 0,        -- [Response] 외국인투자자
+    orgn            BIGINT DEFAULT 0,        -- [Response] 기관계
+    fnnc_invt       BIGINT DEFAULT 0,        -- [Response] 금융투자
+    insrnc          BIGINT DEFAULT 0,        -- [Response] 보험
+    invtrt          BIGINT DEFAULT 0,        -- [Response] 투신
+    etc_fnnc        BIGINT DEFAULT 0,        -- [Response] 기타금융
+    bank            BIGINT DEFAULT 0,        -- [Response] 은행
+    penfnd_etc      BIGINT DEFAULT 0,        -- [Response] 연기금등
+    samo_fund       BIGINT DEFAULT 0,        -- [Response] 사모펀드
+    natn            BIGINT DEFAULT 0,        -- [Response] 국가
+    etc_corp        BIGINT DEFAULT 0,        -- [Response] 기타법인
+    natfor          BIGINT DEFAULT 0,        -- [Response] 내외국인
+
+    -- 5. System Audit (관리 정보)
+    reg_dt          TIMESTAMP DEFAULT NOW(), -- 데이터 적재 일시
+
+    -- Primary Key 제약조건 설정
+    CONSTRAINT pk_tb_stock_investor_daily 
+        PRIMARY KEY (stk_cd, dt, trde_tp, amt_qty_tp)
+);
+C. 인덱스 전략
+PK: stk_cd + dt + trde_tp + amt_qty_tp
+Index 1: dt (기간 조회 성능 향상)
+Index 2: stk_cd (특정 종목 조회 성능 향상)

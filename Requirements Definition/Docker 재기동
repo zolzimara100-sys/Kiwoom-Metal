@@ -1,0 +1,14 @@
+    cd /Users/juhyunhwang/kiwoom
+     docker-compose down && docker-compose build && docker-compose up -d
+
+
+         # 코드 변경 후 재빌드 필요
+     docker-compose down
+     docker-compose build
+     docker-compose up -d
+
+
+     
+     
+     Gemini Code Assist server crashed 5 times in the last 3 minutes. 
+     The server will not be restarted. See the output for more information.

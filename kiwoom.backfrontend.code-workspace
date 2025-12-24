@@ -1,0 +1,22 @@
+{
+    "folders": [
+		{
+			"name": "kiwoom",
+			"path": "src/main/java/com/stocktrading/kiwoom"
+		},
+		{
+			"name": "frontend",
+			"path": "frontend"
+		},
+		{
+			"name": "Requirements Definition",
+			"path": "Requirements Definition"
+		},
+		{
+			"path": "python-analysis"
+		}
+	],
+    "settings": {
+        "java.project.sourcePaths": []
+    }
+}

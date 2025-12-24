@@ -1,0 +1,136 @@
+# 통계분석 - 투자자 이동평균
+
+## 1. 테이블 생성
+
+```sql
+CREATE TABLE IF NOT EXISTS tb_stock_investor_ma (
+    stk_cd VARCHAR(20) NOT NULL,          -- 종목코드
+    dt VARCHAR(8) NOT NULL,               -- 날짜 (YYYYMMDD)
+    sector VARCHAR(50),                   -- 섹터 (인덱스용)
+    category1 VARCHAR(50),                -- 사용자 구분1
+    category2 VARCHAR(50),                -- 사용자 구분2
+    category3 VARCHAR(50),                -- 사용자 구분3 
+        
+    -- 외국인 (Foreigner)
+    frgnr_invsr_ma5 NUMERIC(15,2),
+    frgnr_invsr_ma10 NUMERIC(15,2),
+    frgnr_invsr_ma20 NUMERIC(15,2),
+    frgnr_invsr_ma60 NUMERIC(15,2),
+    
+    -- 기관계 (Institutional)
+    orgn_ma5 NUMERIC(15,2),
+    orgn_ma10 NUMERIC(15,2),
+    orgn_ma20 NUMERIC(15,2),
+    orgn_ma60 NUMERIC(15,2),
+    
+    -- 금융투자 (Financial Investment)
+    fnnc_invt_ma5 NUMERIC(15,2),
+    fnnc_invt_ma10 NUMERIC(15,2),
+    fnnc_invt_ma20 NUMERIC(15,2),
+    fnnc_invt_ma60 NUMERIC(15,2),
+    
+    -- 보험 (Insurance)
+    insrnc_ma5 NUMERIC(15,2),
+    insrnc_ma10 NUMERIC(15,2),
+    insrnc_ma20 NUMERIC(15,2),
+    insrnc_ma60 NUMERIC(15,2),
+    
+    -- 투신 (Investment Trust)
+    invtrt_ma5 NUMERIC(15,2),
+    invtrt_ma10 NUMERIC(15,2),
+    invtrt_ma20 NUMERIC(15,2),
+    invtrt_ma60 NUMERIC(15,2),
+    
+    -- 기타금융 (Other Finance)
+    etc_fnnc_ma5 NUMERIC(15,2),
+    etc_fnnc_ma10 NUMERIC(15,2),
+    etc_fnnc_ma20 NUMERIC(15,2),
+    etc_fnnc_ma60 NUMERIC(15,2),
+    
+    -- 은행 (Bank)
+    bank_ma5 NUMERIC(15,2),
+    bank_ma10 NUMERIC(15,2),
+    bank_ma20 NUMERIC(15,2),
+    bank_ma60 NUMERIC(15,2),
+    
+    -- 연기금등 (Pension Fund)
+    penfnd_etc_ma5 NUMERIC(15,2),
+    penfnd_etc_ma10 NUMERIC(15,2),
+    penfnd_etc_ma20 NUMERIC(15,2),
+    penfnd_etc_ma60 NUMERIC(15,2),
+    
+    -- 사모펀드 (Private Equity)
+    samo_fund_ma5 NUMERIC(15,2),
+    samo_fund_ma10 NUMERIC(15,2),
+    samo_fund_ma20 NUMERIC(15,2),
+    samo_fund_ma60 NUMERIC(15,2),
+    
+    -- 국가 (Government)
+    natn_ma5 NUMERIC(15,2),
+    natn_ma10 NUMERIC(15,2),
+    natn_ma20 NUMERIC(15,2),
+    natn_ma60 NUMERIC(15,2),
+    
+    -- 기타법인 (Other Corporation)
+    etc_corp_ma5 NUMERIC(15,2),
+    etc_corp_ma10 NUMERIC(15,2),
+    etc_corp_ma20 NUMERIC(15,2),
+    etc_corp_ma60 NUMERIC(15,2),
+    
+    -- 개인 (Individual)
+    indvdl_ma5 NUMERIC(15,2),
+    indvdl_ma10 NUMERIC(15,2),
+    indvdl_ma20 NUMERIC(15,2),
+    indvdl_ma60 NUMERIC(15,2),
+    
+    -- 메타데이터
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    
+    CONSTRAINT pk_tb_stock_investor_ma PRIMARY KEY (stk_cd, dt)
+);
+
+-- 섹터별 통계 쿼리를 위한 인덱스
+CREATE INDEX idx_stock_investor_ma_sector ON tb_stock_investor_ma(sector);
+
+-- 날짜별 조회를 위한 인덱스
+CREATE INDEX idx_stock_investor_ma_dt ON tb_stock_investor_ma(dt);
+```
+
+## 2. 투자자 유형별 이동평균 컬럼
+
+| 컬럼 접두어 | 투자자 유형 | 설명 |
+|------------|-----------|------|
+| frgnr_invsr | 외국인투자자 | Foreign Investor |
+| orgn | 기관계 | Institutional |
+| fnnc_invt | 금융투자 | Financial Investment |
+| insrnc | 보험 | Insurance |
+| invtrt | 투신 | Investment Trust |
+| etc_fnnc | 기타금융 | Other Finance |
+| bank | 은행 | Bank |
+| penfnd_etc | 연기금등 | Pension Fund |
+| samo_fund | 사모펀드 | Private Equity |
+| natn | 국가 | Government |
+| etc_corp | 기타법인 | Other Corporation |
+| indvdl | 개인 | Individual |
+
+## 3. 이동평균 기간
+
+- **MA5**: 5일 이동평균
+- **MA10**: 10일 이동평균
+- **MA20**: 20일 이동평균
+- **MA60**: 60일 이동평균	
+
+
+
+[일별 Data수집 이후 이동평균 계산 로직]
+
+현재의 이동평균 계산법.
+-tb_stock_investor_chart의 모든 stk_cd에 대해 max(dt), min(dt) 구한다. 
+-tb_stock_investor_ma 테이블에서 해당 stk_cd의 max(dt), min(dt)를 구한다.
+-if. tb_stock_investor_ma에 해당 stk_cd값이 없다면 이것은 신규로 tb_stock_investor_chart에 데이터가 들어온 종목이므로 
+  tb_stock_investor_chart의 min(dt)부터 max(dt)까지 각각의 이동평균을 계산해서 tb_stock_investor_ma에 insert한다.
+- if. tb_stock_investor_ma에 해당 stk_cd값이 존재한다면 
+  tb_stock_investor_ma의 max(dt) 다음날짜 부터 tb_stock_investor_chart의 max(dt)까지 각각의 이동평균을 계산해서 tb_stock_investor_ma에 insert한다.  
+
+

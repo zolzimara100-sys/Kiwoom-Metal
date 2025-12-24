@@ -1,0 +1,367 @@
+# PRD-0021 KOSPI200 투자자별 이동평균값 저장 기능 추가
+
+## 1. 개요
+**구분**: 신규 기능
+**목적**: KOSPI200 지수를 하나의 종목으로 간주하여 투자자별 이동평균 추세를 분석할 수 있는 기능 제공
+
+## 2. 배경
+- KOSPI200 지수는 한국 증시의 대표 지수로 시장 전체 흐름을 파악하는 중요한 지표
+- 개별 종목 분석과 더불어 KOSPI200 전체에 대한 투자자별 매매 동향 분석 필요
+- KOSPI200 구성 종목들의 투자자별 순매수량을 합산하여 지수 레벨의 투자심리 파악
+
+## 3. 기능 요구사항
+
+### 3.1 KOSPI200 대상 종목 선정
+- **참조 테이블**: `tb_stock_list_meta`
+- KOSPI200 종목 코드를 기준으로 대상 종목 식별
+- KOSPI200 편입/편출 변경사항 반영
+
+### 3.2 데이터 집계 방식
+KOSPI200을 하나의 가상 종목으로 간주하고 다음과 같이 처리:
+- 동일 날짜(dt)의 모든 KOSPI200 구성 종목 데이터 조회
+- 각 투자자 유형별로 순매수량 컬럼값을 모두 합산
+- 합산된 값을 기준으로 이동평균 계산
+
+### 3.3 이동평균 기간
+5일, 10일, 20일, 30일, 40일, 50일, 60일, 90일, 4개월, 6개월, 8개월, 10개월, 12개월
+
+### 3.4 데이터 저장
+- **출력 테이블**: `tb_stock_investor_ma`
+- **종목코드(stk_cd)**: `kospi200`
+- **날짜(dt)**: 각 거래일
+- **섹터(sector)**: `kospi200`
+- **카테고리(category1, category2, category3)**: `kospi200전체`
+
+## 4. 기술 사양
+
+### 4.1 데이터 소스
+
+#### 4.1.1 입력 테이블
+**테이블**: `tb_stock_investor_chart`
+- KOSPI200 구성 종목들의 일별 투자자별 순매수량 데이터
+
+**테이블**: `tb_stock_list_meta`
+- KOSPI200 종목 코드 리스트
+
+### 4.2 데이터 집계 로직
+
+#### 4.2.1 일별 투자자별 순매수량 합산
+```sql
+예시 쿼리:
+SELECT
+    dt,
+    SUM(frgnr_invsr) as frgnr_invsr_total,        -- 외국인
+    SUM(orgn) as orgn_total,                      -- 기관계
+    SUM(fnnc_invt) as fnnc_invt_total,            -- 금융투자
+    SUM(insrnc) as insrnc_total,                  -- 보험
+    SUM(invtrt) as invtrt_total,                  -- 투신
+    SUM(etc_fnnc) as etc_fnnc_total,              -- 기타금융
+    SUM(bank) as bank_total,                      -- 은행
+    SUM(penfnd_etc) as penfnd_etc_total,          -- 연기금등
+    SUM(samo_fund) as samo_fund_total,            -- 사모펀드
+    SUM(natn) as natn_total,                      -- 국가
+    SUM(etc_corp) as etc_corp_total,              -- 기타법인
+    SUM(natfor) as natfor_total                   -- 내국인
+FROM tb_stock_investor_chart
+WHERE stk_cd IN (
+    SELECT stk_cd
+    FROM tb_stock_list_meta
+    WHERE kospi200_yn = 'Y'  -- KOSPI200 종목 여부 플래그 (실제 컬럼명 확인 필요)
+)
+AND dt = :target_date
+GROUP BY dt
+```
+
+#### 4.2.2 이동평균 계산
+각 투자자 유형별 합산값을 기준으로 이동평균 계산:
+
+**일 단위 이동평균**
+```
+MA(n일) = (최근 n거래일의 투자자별 합산 순매수량 합계) / n
+```
+
+**월 단위 이동평균**
+```
+거래일 기준:
+- 4개월 ≈ 80거래일
+- 6개월 ≈ 120거래일
+- 8개월 ≈ 160거래일
+- 10개월 ≈ 200거래일
+- 12개월 ≈ 240거래일
+
+MA(n개월) = (최근 n개월 거래일의 투자자별 합산 순매수량 합계) / (n개월의 거래일 수)
+```
+
+### 4.3 데이터 저장 스키마
+
+#### 4.3.1 저장 레코드 형식
+**테이블**: `tb_stock_investor_ma`
+
+저장되는 각 레코드의 형식:
+
+```
+기본 정보:
+stk_cd = 'kospi200'
+dt = '20240115' (예시: YYYYMMDD 형식)
+sector = 'kospi200'
+category1 = 'kospi200전체'
+category2 = 'kospi200전체'
+category3 = 'kospi200전체'
+cur_prc = NULL (또는 KOSPI200 지수값)
+
+1. 외국인 (frgnr_invsr):
+frgnr_invsr_ma5, frgnr_invsr_ma10, frgnr_invsr_ma20, frgnr_invsr_ma30,
+frgnr_invsr_ma40, frgnr_invsr_ma50, frgnr_invsr_ma60, frgnr_invsr_ma90,
+frgnr_invsr_ma4m, frgnr_invsr_ma6m, frgnr_invsr_ma8m, frgnr_invsr_ma10m, frgnr_invsr_ma12m
+
+2. 기관계 (orgn):
+orgn_ma5, orgn_ma10, orgn_ma20, orgn_ma30, orgn_ma40, orgn_ma50,
+orgn_ma60, orgn_ma90, orgn_ma4m, orgn_ma6m, orgn_ma8m, orgn_ma10m, orgn_ma12m
+
+3. 금융투자 (fnnc_invt):
+fnnc_invt_ma5, fnnc_invt_ma10, fnnc_invt_ma20, fnnc_invt_ma30, fnnc_invt_ma40,
+fnnc_invt_ma50, fnnc_invt_ma60, fnnc_invt_ma90, fnnc_invt_ma4m, fnnc_invt_ma6m,
+fnnc_invt_ma8m, fnnc_invt_ma10m, fnnc_invt_ma12m
+
+4. 보험 (insrnc):
+insrnc_ma5, insrnc_ma10, insrnc_ma20, insrnc_ma30, insrnc_ma40, insrnc_ma50,
+insrnc_ma60, insrnc_ma90, insrnc_ma4m, insrnc_ma6m, insrnc_ma8m, insrnc_ma10m, insrnc_ma12m
+
+5. 투신 (invtrt):
+invtrt_ma5, invtrt_ma10, invtrt_ma20, invtrt_ma30, invtrt_ma40, invtrt_ma50,
+invtrt_ma60, invtrt_ma90, invtrt_ma4m, invtrt_ma6m, invtrt_ma8m, invtrt_ma10m, invtrt_ma12m
+
+6. 기타금융 (etc_fnnc):
+etc_fnnc_ma5, etc_fnnc_ma10, etc_fnnc_ma20, etc_fnnc_ma30, etc_fnnc_ma40,
+etc_fnnc_ma50, etc_fnnc_ma60, etc_fnnc_ma90, etc_fnnc_ma4m, etc_fnnc_ma6m,
+etc_fnnc_ma8m, etc_fnnc_ma10m, etc_fnnc_ma12m
+
+7. 은행 (bank):
+bank_ma5, bank_ma10, bank_ma20, bank_ma30, bank_ma40, bank_ma50,
+bank_ma60, bank_ma90, bank_ma4m, bank_ma6m, bank_ma8m, bank_ma10m, bank_ma12m
+
+8. 연기금등 (penfnd_etc):
+penfnd_etc_ma5, penfnd_etc_ma10, penfnd_etc_ma20, penfnd_etc_ma30, penfnd_etc_ma40,
+penfnd_etc_ma50, penfnd_etc_ma60, penfnd_etc_ma90, penfnd_etc_ma4m, penfnd_etc_ma6m,
+penfnd_etc_ma8m, penfnd_etc_ma10m, penfnd_etc_ma12m
+
+9. 사모펀드 (samo_fund):
+samo_fund_ma5, samo_fund_ma10, samo_fund_ma20, samo_fund_ma30, samo_fund_ma40,
+samo_fund_ma50, samo_fund_ma60, samo_fund_ma90, samo_fund_ma4m, samo_fund_ma6m,
+samo_fund_ma8m, samo_fund_ma10m, samo_fund_ma12m
+
+10. 국가 (natn):
+natn_ma5, natn_ma10, natn_ma20, natn_ma30, natn_ma40, natn_ma50,
+natn_ma60, natn_ma90, natn_ma4m, natn_ma6m, natn_ma8m, natn_ma10m, natn_ma12m
+
+11. 기타법인 (etc_corp):
+etc_corp_ma5, etc_corp_ma10, etc_corp_ma20, etc_corp_ma30, etc_corp_ma40,
+etc_corp_ma50, etc_corp_ma60, etc_corp_ma90, etc_corp_ma4m, etc_corp_ma6m,
+etc_corp_ma8m, etc_corp_ma10m, etc_corp_ma12m
+
+12. 내국인 (natfor):
+natfor_ma5, natfor_ma10, natfor_ma20, natfor_ma30, natfor_ma40, natfor_ma50,
+natfor_ma60, natfor_ma90, natfor_ma4m, natfor_ma6m, natfor_ma8m, natfor_ma10m, natfor_ma12m
+```
+
+**총 저장 컬럼 수**:
+- 투자자 유형: 12개
+- 각 유형별 이동평균 기간: 13개 (ma5, ma10, ma20, ma30, ma40, ma50, ma60, ma90, ma4m, ma6m, ma8m, ma10m, ma12m)
+- 투자자별 이동평균 컬럼: 156개 (12 × 13)
+- 기본 정보 컬럼: 7개 (stk_cd, dt, sector, category1~3, cur_prc)
+
+### 4.4 프로그램 구현 요구사항
+
+#### 4.4.1 배치 프로세스
+1. KOSPI200 종목 리스트 조회 (`tb_stock_list_meta`)
+2. 대상 날짜의 KOSPI200 구성 종목 데이터 조회 (`tb_stock_investor_chart`)
+3. 투자자별 순매수량 합산
+4. 각 이동평균 기간별 계산 수행
+5. `tb_stock_investor_ma` 테이블에 저장 (stk_cd='kospi200')
+
+#### 4.4.2 실행 주기
+- 일 단위 배치 실행
+- 시장 마감 후 `tb_stock_investor_chart` 데이터 수신 완료 시점 이후 실행
+
+#### 4.4.3 데이터 정합성 관리
+- KOSPI200 편입/편출 종목 변경사항 자동 반영
+- 특정 종목의 데이터 누락 시에도 처리 가능하도록 구현
+- UPSERT 로직으로 중복 방지
+
+### 4.5 예외 처리
+
+#### 4.5.1 데이터 누락
+- 일부 KOSPI200 종목의 데이터가 없는 경우: 존재하는 종목만으로 합산 처리
+- 로그에 누락 종목 기록
+
+#### 4.5.2 KOSPI200 편입/편출
+- 과거 데이터 재계산 시: 해당 시점의 KOSPI200 구성 종목 기준 적용
+- `tb_stock_list_meta`에 날짜별 KOSPI200 편입 이력 관리 필요 여부 검토
+
+## 5. 데이터 모델
+
+### 5.1 입력 데이터
+```
+tb_stock_list_meta:
+- stk_cd (종목코드)
+- kospi200_yn (KOSPI200 편입 여부)
+- effective_date (편입일, 선택사항)
+
+tb_stock_investor_chart:
+- stk_cd (종목코드)
+- dt (날짜, YYYYMMDD 형식)
+- frgnr_invsr (외국인 순매수)
+- orgn (기관계 순매수)
+- fnnc_invt (금융투자 순매수)
+- insrnc (보험 순매수)
+- invtrt (투신 순매수)
+- etc_fnnc (기타금융 순매수)
+- bank (은행 순매수)
+- penfnd_etc (연기금등 순매수)
+- samo_fund (사모펀드 순매수)
+- natn (국가 순매수)
+- etc_corp (기타법인 순매수)
+- natfor (내국인 순매수)
+```
+
+### 5.2 출력 데이터
+```
+tb_stock_investor_ma:
+기본 정보:
+- stk_cd = 'kospi200'
+- dt (날짜, YYYYMMDD 형식)
+- sector = 'kospi200'
+- category1 = 'kospi200전체'
+- category2 = 'kospi200전체'
+- category3 = 'kospi200전체'
+- cur_prc (KOSPI200 지수값 또는 NULL)
+
+투자자별 이동평균 (총 12개 투자자 유형):
+1. frgnr_invsr_ma5, ma10, ma20, ma30, ma40, ma50, ma60, ma90, ma4m, ma6m, ma8m, ma10m, ma12m
+2. orgn_ma5, ma10, ma20, ma30, ma40, ma50, ma60, ma90, ma4m, ma6m, ma8m, ma10m, ma12m
+3. fnnc_invt_ma5, ma10, ma20, ma30, ma40, ma50, ma60, ma90, ma4m, ma6m, ma8m, ma10m, ma12m
+4. insrnc_ma5, ma10, ma20, ma30, ma40, ma50, ma60, ma90, ma4m, ma6m, ma8m, ma10m, ma12m
+5. invtrt_ma5, ma10, ma20, ma30, ma40, ma50, ma60, ma90, ma4m, ma6m, ma8m, ma10m, ma12m
+6. etc_fnnc_ma5, ma10, ma20, ma30, ma40, ma50, ma60, ma90, ma4m, ma6m, ma8m, ma10m, ma12m
+7. bank_ma5, ma10, ma20, ma30, ma40, ma50, ma60, ma90, ma4m, ma6m, ma8m, ma10m, ma12m
+8. penfnd_etc_ma5, ma10, ma20, ma30, ma40, ma50, ma60, ma90, ma4m, ma6m, ma8m, ma10m, ma12m
+9. samo_fund_ma5, ma10, ma20, ma30, ma40, ma50, ma60, ma90, ma4m, ma6m, ma8m, ma10m, ma12m
+10. natn_ma5, ma10, ma20, ma30, ma40, ma50, ma60, ma90, ma4m, ma6m, ma8m, ma10m, ma12m
+11. etc_corp_ma5, ma10, ma20, ma30, ma40, ma50, ma60, ma90, ma4m, ma6m, ma8m, ma10m, ma12m
+12. natfor_ma5, ma10, ma20, ma30, ma40, ma50, ma60, ma90, ma4m, ma6m, ma8m, ma10m, ma12m
+```
+
+## 6. API/인터페이스 요구사항
+
+### 6.1 조회 API
+KOSPI200 투자자별 이동평균 데이터 조회를 위한 API 구현 고려:
+```
+GET /api/statistics/kospi200/investor-ma
+Parameters:
+- start_date: 조회 시작일
+- end_date: 조회 종료일
+- investor_type: 투자자 유형 (선택)
+- ma_period: 이동평균 기간 (선택)
+```
+
+### 6.2 응답 데이터 형식
+```json
+{
+  "stockCode": "kospi200",
+  "data": [
+    {
+      "date": "20240115",
+      "sector": "kospi200",
+      "category1": "kospi200전체",
+      "currentPrice": null,
+      "investors": {
+        "frgnrInvsr": {
+          "ma5": 123456.78,
+          "ma10": 234567.89,
+          "ma20": 345678.90,
+          "ma30": 456789.01,
+          "ma40": 567890.12,
+          "ma50": 678901.23,
+          "ma60": 789012.34,
+          "ma90": 890123.45,
+          "ma4m": 901234.56,
+          "ma6m": 912345.67,
+          "ma8m": 923456.78,
+          "ma10m": 934567.89,
+          "ma12m": 945678.90
+        },
+        "orgn": {
+          "ma5": 111111.11,
+          "ma10": 222222.22,
+          ...
+        },
+        "fnncInvt": { ... },
+        "insrnc": { ... },
+        "invtrt": { ... },
+        "etcFnnc": { ... },
+        "bank": { ... },
+        "penfndEtc": { ... },
+        "samoFund": { ... },
+        "natn": { ... },
+        "etcCorp": { ... },
+        "natfor": { ... }
+      }
+    }
+  ]
+}
+```
+
+**투자자 유형 매핑 (DB 컬럼명 → API 필드명)**:
+- `frgnr_invsr` → `frgnrInvsr` (외국인)
+- `orgn` → `orgn` (기관계)
+- `fnnc_invt` → `fnncInvt` (금융투자)
+- `insrnc` → `insrnc` (보험)
+- `invtrt` → `invtrt` (투신)
+- `etc_fnnc` → `etcFnnc` (기타금융)
+- `bank` → `bank` (은행)
+- `penfnd_etc` → `penfndEtc` (연기금등)
+- `samo_fund` → `samoFund` (사모펀드)
+- `natn` → `natn` (국가)
+- `etc_corp` → `etcCorp` (기타법인)
+- `natfor` → `natfor` (내국인)
+
+## 7. 제약사항
+- KOSPI200 구성 종목은 주기적으로 변경될 수 있으므로 최신 리스트 관리 필요
+- 과거 데이터 재계산 시 해당 시점의 KOSPI200 구성 종목 기준 적용 필요
+- 합산 로직으로 인해 개별 종목보다 계산량이 많을 수 있음
+
+## 8. 테스트 요구사항
+
+### 8.1 단위 테스트
+- 투자자별 합산 로직 정확성 검증
+- 각 이동평균 기간별 계산 로직 검증
+- KOSPI200 종목 필터링 로직 검증
+
+### 8.2 통합 테스트
+- 전체 프로세스 End-to-End 테스트
+- 실제 KOSPI200 데이터로 검증
+- 과거 데이터 재계산 테스트
+
+### 8.3 검증 항목
+- 특정 날짜의 수기 계산값과 시스템 계산값 비교
+- KOSPI200 구성 종목 수 확인 (약 200개)
+- 모든 투자자 유형의 이동평균값 저장 확인
+- stk_cd='kospi200' 레코드 생성 확인
+
+### 8.4 성능 테스트
+- 200개 종목 합산 처리 시간 측정
+- 전체 이동평균 계산 시간 측정
+- 목표: 일 배치 처리 시간 30분 이내
+
+## 9. 성공 기준
+- KOSPI200 투자자별 이동평균값 정상 계산 및 저장
+- 일 배치 안정적 운영 (성공률 99% 이상)
+- 계산 정확도 100%
+- API 응답 시간 2초 이내
+
+## 10. 향후 고려사항
+- KOSPI100, KOSDAQ150 등 다른 지수에 대한 확장
+- 섹터별/업종별 투자자 이동평균 분석
+- 실시간 KOSPI200 투자자별 순매수 모니터링
+- 이동평균 골든크로스/데드크로스 알림 기능
+- KOSPI200 vs 개별 종목 비교 분석 기능

@@ -1,0 +1,10 @@
+.git
+.gitignore
+.gradle
+build/*
+!build/libs
+bin
+.vscode
+*.md
+.env
+.env.example

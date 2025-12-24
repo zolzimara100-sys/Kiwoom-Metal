@@ -1,0 +1,124 @@
+목표 : 종목 투자자별 누적금액 계산.
+설명 : 종목별 cur_prc * 각 투자자별 순매수량(tb_stock_investor_chart의 값들) = 누적 투자금액
+입력 : tb_stock_investor_chart 테이블
+출력 : tb_stock_investor_invest_accumulation 테이블
+조건 :
+- 기간 : 2000-01-02 ~ 오늘 날짜
+- 종목 : KOSPI200 전체 종목
+- 투자자 : 개인, 외국인, 기관, 기외(신규생성컬럼 : frgnr_invsr+orgn), 연기금, 투신, 사모펀드, 기타법인, 보험, 은행, 기타금융, 금융, 기금    
+- 누적금액 = 전일누적금액  + 당일 sum(cur_prc * 8라인 투자자 순매수량) , database에 입력할때는 1억으로 나누어서 저장. 소수점 이용하면 절사. 
+- 누적순매수량 = 전일누적순매수량 + 당일 순매수량(순매도량은 컬럼값에 음수가 들어가 있음으로 그대로 더하면 됨)
+- 누적금액 기점은 각 종목이 가지고 있는 데이터 최초부터이고 전일 누적금액은 0원으로 설정.
+
+테이블생성 : tb_stock_investor_chart를 참고해서 tb_stock_investor_invest_accumulation 테이블생성. 
+CREATE TABLE IF NOT EXISTS tb_stock_investor_invest_accumulation (
+    stk_cd VARCHAR(20) NOT NULL,          -- 종목코드
+    dt VARCHAR(8) NOT NULL,               -- 날짜 (YYYYMMDD)
+    sector VARCHAR(50),                   -- 섹터 (인덱스용)
+    category1 VARCHAR(50),                -- 사용자 구분1
+    category2 VARCHAR(50),                -- 사용자 구분2
+    category3 VARCHAR(50),                -- 사용자 구분3 
+ 
+    --다음 투자자의 컬럼명은 tb_stock_investor_chart 테이블의 투자자 컬럼명을 참고해서 생성.     
+    --명명규칙 : 투자자명_net_buy_amount(누적순매수금액), 투자자명(tb_stock_investor_chart의 컬럼명과동일)
+    --예: 개인투자자 : ind_invsr_net_buy_amount, ind_invsr_net_buy_qty 이렇게 투자자별 누적금액과 누적순매수량 2개의 컬럼을 생성. 
+ 
+    ind_invsr	개인투자자 bigint,
+    frgnr_invsr	외국인투자자 bigint,
+    orgn	기관계 bigint,
+    fnnc_invt	금융투자 bigint,
+    insrnc	보험 bigint,
+    invtrt	투신 bigint,
+    etc_fnnc	기타금융 bigint,
+    bank	은행 bigint,
+    penfnd_etc	연기금등 bigint,
+    samo_fund	사모펀드 bigint,
+    natn	국가 bigint,
+    etc_corp	기타법인 bigint,
+    natfor	내외국인 bigint,
+    
+    --tb_stock_investor_chart 테이블에 없는 투자자 컬럼  추가 생성    
+     -- 외국인+기관계 (frgnr_invsr + orgn)
+    frgnr_invsr_orgn bigint,
+
+    --각각 투자자들의 일별 누적금액 컬럼
+    ind_invsr_net_buy_amount bigint,
+    frgnr_invsr_net_buy_amount bigint,
+    orgn_net_buy_amount bigint,
+    fnnc_invt_net_buy_amount bigint,
+    insrnc_net_buy_amount bigint,
+    invtrt_net_buy_amount bigint,
+    etc_fnnc_net_buy_amount bigint,
+    bank_net_buy_amount bigint,
+    penfnd_etc_net_buy_amount bigint,
+    samo_fund_net_buy_amount bigint,
+    natn_net_buy_amount bigint,
+    etc_corp_net_buy_amount bigint,
+    natfor_net_buy_amount bigint,
+    frgnr_orgn_net_buy_amount bigint,
+
+    PRIMARY KEY (stk_cd, dt)
+);
+
+[database 전처리]
+- tb_stock_investor_chart 테이블에서 2000-01-02 ~ 오늘날짜 까지의 KOSPI200 종목들의 데이터를 대상으로 
+  종목별로 투자자별 누적금액과 누적순매수량을 계산해서 tb_stock_investor_invest_accumulation 테이블에 저장.
+- 이 작업은 1회성 작업이며, 완료후에는 매일 새로 수신되는 데이터만을 대상으로 
+  당일 데이터에 대해서만 누적금액과 누적순매수량을 계산해서 tb_stock_investor_invest_accumulation 테이블에 insert하는 프로그램을 별도로 구현.
+
+
+[database 운영방안]
+- tb_stock_investor_invest_accumulation 테이블은 데이터량이 매우 클것으로 예상됨.
+- 1개 종목이 2000-01-02 ~ 오늘날짜 까지 약 6000여건의 데이터가 존재함.
+- KOSPI200 전체 종목을 대상으로 할경우 약 120만건 이상의 데이터가 저장될것으로 예상됨.
+- 따라서 @너의 의견을 제시해줘. 가령 파티셔닝, 인덱스 설정등의 방안.
+
+backend 구현 :
+기존의 프로그램들을 변경하지 않고 새로운  프로그램을 구현.
+
+1. 투자자별 누적금액 계산  프로그램 구현.
+   tb_stock_investor_chart에 저장된 각 종목들을 최저 2000-01-02 ~ 오늘날짜 까지의 데이터를 대상으로
+   각 투자자별로 누적금액과 누적순매수량을 계산해서 tb_stock_investor_invest_accumulation 테이블에 저장하는 프로그램 구현.
+   
+2. 일별 데이터를 일자별로 adhoc으로 조회할수 있도록 API 구현.
+   입력값 : 종목코드, 시작일, 종료일
+   출력값 : tb_stock_investor_invest_accumulation 테이블의 해당 종목코드의 시작일~종료일 까지의 데이터를 조회하여 
+        1) 조회기간 투자자 평균매수단가  = 기간동안 각 투자자별 누적금액 변화량 / 기간동안 각 투자자별 누적순매수량 sum 을 계산해서 반환. ()
+
+frontend 구현 :
+1.http://localhost:3000/ 차트보기 버튼을 화면의 다른 것들처럼 별도의 블록으로 구성해서 차트보기 페이지로 이동할수 있도록 구현. 버튼 이름은 "차트 분석"
+2.http://localhost:3000/moving-average-chart 이름은 http://localhost:3000/moving-chart 로 변경
+3.이곳에 차트들을 모두 모아 놓을 것임. 각 차트들은 상위에 버튼형식으로 나열해주고 click하면 아래에 해당 차트가 보이도록 해줘 
+4.화면구성은 "투자자상관분석"과 동일하게 해줘. 
+5.단 이동평균 5, 10, 20, 60일을 선택하는 콤보박스는 제거해줘.
+6.차트는 다음과 같이 3개를 보여줘
+  1) 투자자별 누적금액 차트
+  2) 투자자별 일별 순매수량 차트
+  3) 투자자별 일별 순매수금액 차트  
+
+
+
+화면 변경 요구사항 
+1. 변경대상 화면 : "투자자 이동평균 분석"  변경내용 :  "과거데이터 +4년" 버튼 복구하고 클릭 시 과거 데이터를 추가로 로드하는 기존 기능을 연결
+2. 변경대상 화면 : "투자자수급분석", 변경내용 :  
+                               1) "튜자자 이동평균 분석" 화면과 같이 "현재가 외국인, 기관 등 투자자 토글버튼 추가.
+                               2)  "과거데이터 +4년" 버튼 만들고(투자자상관분석 화면과 같은 스타일, 위치)  클릭 시 화면에 표시되는 데이터(누적순매수량, 순적순매수금액)과거 데이터를 추가로 로드하는 기존 기능을 연결.
+                               3)  현재가와 누적순매수는 왼쪽 Y축 기준으로 보여주고 투자자별 누적순매수 금액은 우측 Y축을 기준으로 그려줘"
+                             4)요구사항 2번 투자자별로 보여주고 초기 그래프 표현 방식은  초기 표현개월수 span 등등의 기능은 다른 "투자자이동평균"과 같은 기능으로 해줘.
+
+[TRD 변경사항]
+
+1. **투자자 이동평균 분석 화면**:
+   - "과거데이터 +4년" 버튼 복구: 기존 기능을 연결하여 과거 데이터를 추가로 로드.
+
+2. **투자자수급분석 화면**:
+   - "현재가 외국인, 기관 등 투자자 토글버튼" 추가.
+   - "과거데이터 +4년" 버튼 추가: 투자자상관분석 화면과 동일한 스타일과 위치로 구현.
+   - 데이터 표시 방식:
+     - 현재가와 누적순매수는 왼쪽 Y축 기준.
+     - 투자자별 누적순매수 금액은 우측 Y축 기준.
+   - 초기 그래프 표현 방식: "투자자 이동평균 분석" 화면과 동일하게 구현 (초기 표현 개월수 span 등).
+
+3. **API 및 데이터 로직 변경**:
+   - API 확장: 과거 데이터를 추가로 로드하는 기능을 지원.
+   - 데이터 로직: 누적순매수량 및 누적순매수금액 계산 로직을 기존 데이터와 연동.

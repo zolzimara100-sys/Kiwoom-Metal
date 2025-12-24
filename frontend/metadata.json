@@ -1,0 +1,5 @@
+{
+  "name": "Kiwoom Data Analyst",
+  "description": "Stock trading data analysis dashboard featuring server authentication and daily investor data collection tools.",
+  "requestFramePermissions": []
+}

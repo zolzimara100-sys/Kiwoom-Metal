@@ -1,0 +1,483 @@
+package com.stocktrading.kiwoom.batch;
+
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.util.List;
+import java.util.stream.Collectors;
+
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import com.stocktrading.kiwoom.adapter.out.persistence.entity.StockInvestorMaEntity;
+import com.stocktrading.kiwoom.adapter.out.persistence.repository.StockInvestorMaRepository;
+import com.stocktrading.kiwoom.domain.model.InvestorChart;
+import com.stocktrading.kiwoom.domain.port.out.InvestorChartPort;
+
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+
+/**
+ * PRD-0012: 이동평균값 확장 저장 기능
+ *
+ * 개별 종목에 대해 30일, 40일, 50일, 90일, 4개월, 6개월, 8개월, 10개월, 12개월 이동평균 계산
+ */
+@Slf4j
+@Service
+@RequiredArgsConstructor
+public class InvestorMaExtendedBatchService {
+
+    private final InvestorChartPort investorChartPort;
+    private final StockInvestorMaRepository maRepository;
+
+    private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyyMMdd");
+
+    // 이동평균 기간 (일 단위로 변환)
+    private static final int[] MA_PERIODS = {
+        5, 10, 20, 30, 40, 50, 60, 90,
+        80,   // 4개월 ≈ 80 거래일
+        120,  // 6개월 ≈ 120 거래일
+        160,  // 8개월 ≈ 160 거래일
+        200,  // 10개월 ≈ 200 거래일
+        240   // 12개월 ≈ 240 거래일
+    };
+
+    /**
+     * 특정 종목의 이동평균 계산 및 저장
+     *
+     * @param stockCode 종목코드
+     * @param targetDate 계산 대상 날짜
+     */
+    @Transactional
+    public void calculateAndSaveMovingAverages(String stockCode, LocalDate targetDate) {
+        log.info("이동평균 계산 시작: stockCode={}, date={}", stockCode, targetDate);
+
+        try {
+            // 1. 이동평균 계산을 위한 충분한 기간의 데이터 조회 (최대 240일 필요)
+            LocalDate startDate = targetDate.minusDays(250);  // 여유있게 250일
+            List<InvestorChart> charts = investorChartPort.findByStockAndPeriod(
+                stockCode,
+                startDate,
+                targetDate
+            );
+
+            if (charts.isEmpty()) {
+                log.warn("데이터 없음: stockCode={}", stockCode);
+                return;
+            }
+
+            // 날짜 순으로 정렬 (오래된 것 → 최신 순)
+            charts.sort((a, b) -> a.getDate().compareTo(b.getDate()));
+
+            // 2. targetDate 데이터가 있는지 확인
+            boolean targetDateExists = charts.stream()
+                .anyMatch(c -> c.getDate().equals(targetDate));
+
+            if (!targetDateExists) {
+                log.warn("대상 날짜 데이터 없음: stockCode={}, date={}", stockCode, targetDate);
+                return;
+            }
+
+            // 3. 이동평균 계산
+            StockInvestorMaEntity maEntity = calculateMovingAverages(stockCode, targetDate, charts);
+
+            // 4. 저장
+            maRepository.save(maEntity);
+
+            log.info("이동평균 저장 완료: stockCode={}, date={}", stockCode, targetDate);
+
+        } catch (Exception e) {
+            log.error("이동평균 계산 실패: stockCode={}, date={}", stockCode, targetDate, e);
+            throw e;
+        }
+    }
+
+    /**
+     * 여러 종목에 대해 일괄 계산
+     *
+     * @param stockCodes 종목코드 리스트
+     * @param targetDate 계산 대상 날짜
+     */
+    @Transactional
+    public void calculateAndSaveForMultipleStocks(List<String> stockCodes, LocalDate targetDate) {
+        log.info("일괄 이동평균 계산 시작: {} 종목, date={}", stockCodes.size(), targetDate);
+
+        int successCount = 0;
+        int failCount = 0;
+
+        for (String stockCode : stockCodes) {
+            try {
+                calculateAndSaveMovingAverages(stockCode, targetDate);
+                successCount++;
+            } catch (Exception e) {
+                log.error("종목 처리 실패: {}", stockCode, e);
+                failCount++;
+            }
+        }
+
+        log.info("일괄 이동평균 계산 완료: 성공={}, 실패={}", successCount, failCount);
+    }
+
+    /**
+     * 이동평균 계산 (핵심 로직)
+     */
+    private StockInvestorMaEntity calculateMovingAverages(
+        String stockCode,
+        LocalDate targetDate,
+        List<InvestorChart> charts
+    ) {
+        // targetDate 데이터 찾기
+        InvestorChart targetChart = charts.stream()
+            .filter(c -> c.getDate().equals(targetDate))
+            .findFirst()
+            .orElseThrow(() -> new IllegalStateException("Target date not found"));
+
+        // Entity 생성 또는 조회
+        StockInvestorMaEntity entity = maRepository
+            .findById(new com.stocktrading.kiwoom.adapter.out.persistence.entity.StockInvestorMaId(
+                stockCode,
+                targetDate.format(DATE_FORMATTER)
+            ))
+            .orElse(StockInvestorMaEntity.builder()
+                .stkCd(stockCode)
+                .dt(targetDate.format(DATE_FORMATTER))
+                .sector(targetChart.getSector())
+                .category1(targetChart.getCategory1())
+                .category2(targetChart.getCategory2())
+                .category3(targetChart.getCategory3())
+                .curPrc(targetChart.getCurrentPrice())
+                .build());
+
+        // targetDate 인덱스 찾기
+        int targetIndex = -1;
+        for (int i = 0; i < charts.size(); i++) {
+            if (charts.get(i).getDate().equals(targetDate)) {
+                targetIndex = i;
+                break;
+            }
+        }
+
+        // 각 기간별 이동평균 계산
+        setForeignerInvestorMa(entity, charts, targetIndex);
+        setOrganMa(entity, charts, targetIndex);
+        setFinancialInvestmentMa(entity, charts, targetIndex);
+        setInsuranceMa(entity, charts, targetIndex);
+        setInvestmentTrustMa(entity, charts, targetIndex);
+        setEtcFinanceMa(entity, charts, targetIndex);
+        setBankMa(entity, charts, targetIndex);
+        setPensionFundMa(entity, charts, targetIndex);
+        setPrivateEquityMa(entity, charts, targetIndex);
+        setNationalMa(entity, charts, targetIndex);
+        setEtcCorpMa(entity, charts, targetIndex);
+        setNationalForeignerMa(entity, charts, targetIndex);
+
+        return entity;
+    }
+
+    /**
+     * 이동평균 계산 유틸리티 메서드
+     */
+    private BigDecimal calculateMA(List<InvestorChart> charts, int targetIndex, int period,
+                                   java.util.function.Function<InvestorChart, Long> valueExtractor) {
+        if (targetIndex < period - 1) {
+            return null;  // 데이터 부족
+        }
+
+        long sum = 0;
+        for (int i = targetIndex - period + 1; i <= targetIndex; i++) {
+            Long value = valueExtractor.apply(charts.get(i));
+            sum += (value != null ? value : 0);
+        }
+
+        return BigDecimal.valueOf(sum);
+    }
+
+    // 외국인 이동평균 설정
+    private void setForeignerInvestorMa(StockInvestorMaEntity entity, List<InvestorChart> charts, int targetIndex) {
+        entity.setFrgnrInvsrMa5(calculateMA(charts, targetIndex, 5, InvestorChart::getFrgnrInvsr));
+        entity.setFrgnrInvsrMa10(calculateMA(charts, targetIndex, 10, InvestorChart::getFrgnrInvsr));
+        entity.setFrgnrInvsrMa20(calculateMA(charts, targetIndex, 20, InvestorChart::getFrgnrInvsr));
+        entity.setFrgnrInvsrMa30(calculateMA(charts, targetIndex, 30, InvestorChart::getFrgnrInvsr));
+        entity.setFrgnrInvsrMa40(calculateMA(charts, targetIndex, 40, InvestorChart::getFrgnrInvsr));
+        entity.setFrgnrInvsrMa50(calculateMA(charts, targetIndex, 50, InvestorChart::getFrgnrInvsr));
+        entity.setFrgnrInvsrMa60(calculateMA(charts, targetIndex, 60, InvestorChart::getFrgnrInvsr));
+        entity.setFrgnrInvsrMa90(calculateMA(charts, targetIndex, 90, InvestorChart::getFrgnrInvsr));
+        entity.setFrgnrInvsrMa1m(calculateMA(charts, targetIndex, 20, InvestorChart::getFrgnrInvsr));   // 1개월
+        entity.setFrgnrInvsrMa2m(calculateMA(charts, targetIndex, 40, InvestorChart::getFrgnrInvsr));   // 2개월
+        entity.setFrgnrInvsrMa3m(calculateMA(charts, targetIndex, 60, InvestorChart::getFrgnrInvsr));   // 3개월
+        entity.setFrgnrInvsrMa4m(calculateMA(charts, targetIndex, 80, InvestorChart::getFrgnrInvsr));   // 4개월
+        entity.setFrgnrInvsrMa5m(calculateMA(charts, targetIndex, 100, InvestorChart::getFrgnrInvsr));  // 5개월
+        entity.setFrgnrInvsrMa6m(calculateMA(charts, targetIndex, 120, InvestorChart::getFrgnrInvsr));  // 6개월
+        entity.setFrgnrInvsrMa7m(calculateMA(charts, targetIndex, 140, InvestorChart::getFrgnrInvsr));  // 7개월
+        entity.setFrgnrInvsrMa8m(calculateMA(charts, targetIndex, 160, InvestorChart::getFrgnrInvsr));  // 8개월
+        entity.setFrgnrInvsrMa9m(calculateMA(charts, targetIndex, 180, InvestorChart::getFrgnrInvsr));  // 9개월
+        entity.setFrgnrInvsrMa10m(calculateMA(charts, targetIndex, 200, InvestorChart::getFrgnrInvsr)); // 10개월
+        entity.setFrgnrInvsrMa11m(calculateMA(charts, targetIndex, 220, InvestorChart::getFrgnrInvsr)); // 11개월
+        entity.setFrgnrInvsrMa12m(calculateMA(charts, targetIndex, 240, InvestorChart::getFrgnrInvsr)); // 12개월
+    }
+
+    // 기관계 이동평균 설정
+    private void setOrganMa(StockInvestorMaEntity entity, List<InvestorChart> charts, int targetIndex) {
+        entity.setOrgnMa5(calculateMA(charts, targetIndex, 5, InvestorChart::getOrgn));
+        entity.setOrgnMa10(calculateMA(charts, targetIndex, 10, InvestorChart::getOrgn));
+        entity.setOrgnMa20(calculateMA(charts, targetIndex, 20, InvestorChart::getOrgn));
+        entity.setOrgnMa30(calculateMA(charts, targetIndex, 30, InvestorChart::getOrgn));
+        entity.setOrgnMa40(calculateMA(charts, targetIndex, 40, InvestorChart::getOrgn));
+        entity.setOrgnMa50(calculateMA(charts, targetIndex, 50, InvestorChart::getOrgn));
+        entity.setOrgnMa60(calculateMA(charts, targetIndex, 60, InvestorChart::getOrgn));
+        entity.setOrgnMa90(calculateMA(charts, targetIndex, 90, InvestorChart::getOrgn));
+        entity.setOrgnMa1m(calculateMA(charts, targetIndex, 20, InvestorChart::getOrgn));   // 1개월
+        entity.setOrgnMa2m(calculateMA(charts, targetIndex, 40, InvestorChart::getOrgn));   // 2개월
+        entity.setOrgnMa3m(calculateMA(charts, targetIndex, 60, InvestorChart::getOrgn));   // 3개월
+        entity.setOrgnMa4m(calculateMA(charts, targetIndex, 80, InvestorChart::getOrgn));   // 4개월
+        entity.setOrgnMa5m(calculateMA(charts, targetIndex, 100, InvestorChart::getOrgn));  // 5개월
+        entity.setOrgnMa6m(calculateMA(charts, targetIndex, 120, InvestorChart::getOrgn));  // 6개월
+        entity.setOrgnMa7m(calculateMA(charts, targetIndex, 140, InvestorChart::getOrgn));  // 7개월
+        entity.setOrgnMa8m(calculateMA(charts, targetIndex, 160, InvestorChart::getOrgn));  // 8개월
+        entity.setOrgnMa9m(calculateMA(charts, targetIndex, 180, InvestorChart::getOrgn));  // 9개월
+        entity.setOrgnMa10m(calculateMA(charts, targetIndex, 200, InvestorChart::getOrgn)); // 10개월
+        entity.setOrgnMa11m(calculateMA(charts, targetIndex, 220, InvestorChart::getOrgn)); // 11개월
+        entity.setOrgnMa12m(calculateMA(charts, targetIndex, 240, InvestorChart::getOrgn)); // 12개월
+    }
+
+    // 금융투자 이동평균 설정
+    private void setFinancialInvestmentMa(StockInvestorMaEntity entity, List<InvestorChart> charts, int targetIndex) {
+        entity.setFnncInvtMa5(calculateMA(charts, targetIndex, 5, InvestorChart::getFnncInvt));
+        entity.setFnncInvtMa10(calculateMA(charts, targetIndex, 10, InvestorChart::getFnncInvt));
+        entity.setFnncInvtMa20(calculateMA(charts, targetIndex, 20, InvestorChart::getFnncInvt));
+        entity.setFnncInvtMa30(calculateMA(charts, targetIndex, 30, InvestorChart::getFnncInvt));
+        entity.setFnncInvtMa40(calculateMA(charts, targetIndex, 40, InvestorChart::getFnncInvt));
+        entity.setFnncInvtMa50(calculateMA(charts, targetIndex, 50, InvestorChart::getFnncInvt));
+        entity.setFnncInvtMa60(calculateMA(charts, targetIndex, 60, InvestorChart::getFnncInvt));
+        entity.setFnncInvtMa90(calculateMA(charts, targetIndex, 90, InvestorChart::getFnncInvt));
+        entity.setFnncInvtMa1m(calculateMA(charts, targetIndex, 20, InvestorChart::getFnncInvt));   // 1개월
+        entity.setFnncInvtMa2m(calculateMA(charts, targetIndex, 40, InvestorChart::getFnncInvt));   // 2개월
+        entity.setFnncInvtMa3m(calculateMA(charts, targetIndex, 60, InvestorChart::getFnncInvt));   // 3개월
+        entity.setFnncInvtMa4m(calculateMA(charts, targetIndex, 80, InvestorChart::getFnncInvt));   // 4개월
+        entity.setFnncInvtMa5m(calculateMA(charts, targetIndex, 100, InvestorChart::getFnncInvt));  // 5개월
+        entity.setFnncInvtMa6m(calculateMA(charts, targetIndex, 120, InvestorChart::getFnncInvt));  // 6개월
+        entity.setFnncInvtMa7m(calculateMA(charts, targetIndex, 140, InvestorChart::getFnncInvt));  // 7개월
+        entity.setFnncInvtMa8m(calculateMA(charts, targetIndex, 160, InvestorChart::getFnncInvt));  // 8개월
+        entity.setFnncInvtMa9m(calculateMA(charts, targetIndex, 180, InvestorChart::getFnncInvt));  // 9개월
+        entity.setFnncInvtMa10m(calculateMA(charts, targetIndex, 200, InvestorChart::getFnncInvt)); // 10개월
+        entity.setFnncInvtMa11m(calculateMA(charts, targetIndex, 220, InvestorChart::getFnncInvt)); // 11개월
+        entity.setFnncInvtMa12m(calculateMA(charts, targetIndex, 240, InvestorChart::getFnncInvt)); // 12개월
+    }
+
+    // 보험 이동평균 설정
+    private void setInsuranceMa(StockInvestorMaEntity entity, List<InvestorChart> charts, int targetIndex) {
+        entity.setInsrncMa5(calculateMA(charts, targetIndex, 5, InvestorChart::getInsrnc));
+        entity.setInsrncMa10(calculateMA(charts, targetIndex, 10, InvestorChart::getInsrnc));
+        entity.setInsrncMa20(calculateMA(charts, targetIndex, 20, InvestorChart::getInsrnc));
+        entity.setInsrncMa30(calculateMA(charts, targetIndex, 30, InvestorChart::getInsrnc));
+        entity.setInsrncMa40(calculateMA(charts, targetIndex, 40, InvestorChart::getInsrnc));
+        entity.setInsrncMa50(calculateMA(charts, targetIndex, 50, InvestorChart::getInsrnc));
+        entity.setInsrncMa60(calculateMA(charts, targetIndex, 60, InvestorChart::getInsrnc));
+        entity.setInsrncMa90(calculateMA(charts, targetIndex, 90, InvestorChart::getInsrnc));
+        entity.setInsrncMa1m(calculateMA(charts, targetIndex, 20, InvestorChart::getInsrnc));   // 1개월
+        entity.setInsrncMa2m(calculateMA(charts, targetIndex, 40, InvestorChart::getInsrnc));   // 2개월
+        entity.setInsrncMa3m(calculateMA(charts, targetIndex, 60, InvestorChart::getInsrnc));   // 3개월
+        entity.setInsrncMa4m(calculateMA(charts, targetIndex, 80, InvestorChart::getInsrnc));   // 4개월
+        entity.setInsrncMa5m(calculateMA(charts, targetIndex, 100, InvestorChart::getInsrnc));  // 5개월
+        entity.setInsrncMa6m(calculateMA(charts, targetIndex, 120, InvestorChart::getInsrnc));  // 6개월
+        entity.setInsrncMa7m(calculateMA(charts, targetIndex, 140, InvestorChart::getInsrnc));  // 7개월
+        entity.setInsrncMa8m(calculateMA(charts, targetIndex, 160, InvestorChart::getInsrnc));  // 8개월
+        entity.setInsrncMa9m(calculateMA(charts, targetIndex, 180, InvestorChart::getInsrnc));  // 9개월
+        entity.setInsrncMa10m(calculateMA(charts, targetIndex, 200, InvestorChart::getInsrnc)); // 10개월
+        entity.setInsrncMa11m(calculateMA(charts, targetIndex, 220, InvestorChart::getInsrnc)); // 11개월
+        entity.setInsrncMa12m(calculateMA(charts, targetIndex, 240, InvestorChart::getInsrnc)); // 12개월
+    }
+
+    // 투신 이동평균 설정
+    private void setInvestmentTrustMa(StockInvestorMaEntity entity, List<InvestorChart> charts, int targetIndex) {
+        entity.setInvtrtMa5(calculateMA(charts, targetIndex, 5, InvestorChart::getInvtrt));
+        entity.setInvtrtMa10(calculateMA(charts, targetIndex, 10, InvestorChart::getInvtrt));
+        entity.setInvtrtMa20(calculateMA(charts, targetIndex, 20, InvestorChart::getInvtrt));
+        entity.setInvtrtMa30(calculateMA(charts, targetIndex, 30, InvestorChart::getInvtrt));
+        entity.setInvtrtMa40(calculateMA(charts, targetIndex, 40, InvestorChart::getInvtrt));
+        entity.setInvtrtMa50(calculateMA(charts, targetIndex, 50, InvestorChart::getInvtrt));
+        entity.setInvtrtMa60(calculateMA(charts, targetIndex, 60, InvestorChart::getInvtrt));
+        entity.setInvtrtMa90(calculateMA(charts, targetIndex, 90, InvestorChart::getInvtrt));
+        entity.setInvtrtMa1m(calculateMA(charts, targetIndex, 20, InvestorChart::getInvtrt));   // 1개월
+        entity.setInvtrtMa2m(calculateMA(charts, targetIndex, 40, InvestorChart::getInvtrt));   // 2개월
+        entity.setInvtrtMa3m(calculateMA(charts, targetIndex, 60, InvestorChart::getInvtrt));   // 3개월
+        entity.setInvtrtMa4m(calculateMA(charts, targetIndex, 80, InvestorChart::getInvtrt));   // 4개월
+        entity.setInvtrtMa5m(calculateMA(charts, targetIndex, 100, InvestorChart::getInvtrt));  // 5개월
+        entity.setInvtrtMa6m(calculateMA(charts, targetIndex, 120, InvestorChart::getInvtrt));  // 6개월
+        entity.setInvtrtMa7m(calculateMA(charts, targetIndex, 140, InvestorChart::getInvtrt));  // 7개월
+        entity.setInvtrtMa8m(calculateMA(charts, targetIndex, 160, InvestorChart::getInvtrt));  // 8개월
+        entity.setInvtrtMa9m(calculateMA(charts, targetIndex, 180, InvestorChart::getInvtrt));  // 9개월
+        entity.setInvtrtMa10m(calculateMA(charts, targetIndex, 200, InvestorChart::getInvtrt)); // 10개월
+        entity.setInvtrtMa11m(calculateMA(charts, targetIndex, 220, InvestorChart::getInvtrt)); // 11개월
+        entity.setInvtrtMa12m(calculateMA(charts, targetIndex, 240, InvestorChart::getInvtrt)); // 12개월
+    }
+
+    // 기타금융 이동평균 설정
+    private void setEtcFinanceMa(StockInvestorMaEntity entity, List<InvestorChart> charts, int targetIndex) {
+        entity.setEtcFnncMa5(calculateMA(charts, targetIndex, 5, InvestorChart::getEtcFnnc));
+        entity.setEtcFnncMa10(calculateMA(charts, targetIndex, 10, InvestorChart::getEtcFnnc));
+        entity.setEtcFnncMa20(calculateMA(charts, targetIndex, 20, InvestorChart::getEtcFnnc));
+        entity.setEtcFnncMa30(calculateMA(charts, targetIndex, 30, InvestorChart::getEtcFnnc));
+        entity.setEtcFnncMa40(calculateMA(charts, targetIndex, 40, InvestorChart::getEtcFnnc));
+        entity.setEtcFnncMa50(calculateMA(charts, targetIndex, 50, InvestorChart::getEtcFnnc));
+        entity.setEtcFnncMa60(calculateMA(charts, targetIndex, 60, InvestorChart::getEtcFnnc));
+        entity.setEtcFnncMa90(calculateMA(charts, targetIndex, 90, InvestorChart::getEtcFnnc));
+        entity.setEtcFnncMa1m(calculateMA(charts, targetIndex, 20, InvestorChart::getEtcFnnc));   // 1개월
+        entity.setEtcFnncMa2m(calculateMA(charts, targetIndex, 40, InvestorChart::getEtcFnnc));   // 2개월
+        entity.setEtcFnncMa3m(calculateMA(charts, targetIndex, 60, InvestorChart::getEtcFnnc));   // 3개월
+        entity.setEtcFnncMa4m(calculateMA(charts, targetIndex, 80, InvestorChart::getEtcFnnc));   // 4개월
+        entity.setEtcFnncMa5m(calculateMA(charts, targetIndex, 100, InvestorChart::getEtcFnnc));  // 5개월
+        entity.setEtcFnncMa6m(calculateMA(charts, targetIndex, 120, InvestorChart::getEtcFnnc));  // 6개월
+        entity.setEtcFnncMa7m(calculateMA(charts, targetIndex, 140, InvestorChart::getEtcFnnc));  // 7개월
+        entity.setEtcFnncMa8m(calculateMA(charts, targetIndex, 160, InvestorChart::getEtcFnnc));  // 8개월
+        entity.setEtcFnncMa9m(calculateMA(charts, targetIndex, 180, InvestorChart::getEtcFnnc));  // 9개월
+        entity.setEtcFnncMa10m(calculateMA(charts, targetIndex, 200, InvestorChart::getEtcFnnc)); // 10개월
+        entity.setEtcFnncMa11m(calculateMA(charts, targetIndex, 220, InvestorChart::getEtcFnnc)); // 11개월
+        entity.setEtcFnncMa12m(calculateMA(charts, targetIndex, 240, InvestorChart::getEtcFnnc)); // 12개월
+    }
+
+    // 은행 이동평균 설정
+    private void setBankMa(StockInvestorMaEntity entity, List<InvestorChart> charts, int targetIndex) {
+        entity.setBankMa5(calculateMA(charts, targetIndex, 5, InvestorChart::getBank));
+        entity.setBankMa10(calculateMA(charts, targetIndex, 10, InvestorChart::getBank));
+        entity.setBankMa20(calculateMA(charts, targetIndex, 20, InvestorChart::getBank));
+        entity.setBankMa30(calculateMA(charts, targetIndex, 30, InvestorChart::getBank));
+        entity.setBankMa40(calculateMA(charts, targetIndex, 40, InvestorChart::getBank));
+        entity.setBankMa50(calculateMA(charts, targetIndex, 50, InvestorChart::getBank));
+        entity.setBankMa60(calculateMA(charts, targetIndex, 60, InvestorChart::getBank));
+        entity.setBankMa90(calculateMA(charts, targetIndex, 90, InvestorChart::getBank));
+        entity.setBankMa1m(calculateMA(charts, targetIndex, 20, InvestorChart::getBank));   // 1개월
+        entity.setBankMa2m(calculateMA(charts, targetIndex, 40, InvestorChart::getBank));   // 2개월
+        entity.setBankMa3m(calculateMA(charts, targetIndex, 60, InvestorChart::getBank));   // 3개월
+        entity.setBankMa4m(calculateMA(charts, targetIndex, 80, InvestorChart::getBank));   // 4개월
+        entity.setBankMa5m(calculateMA(charts, targetIndex, 100, InvestorChart::getBank));  // 5개월
+        entity.setBankMa6m(calculateMA(charts, targetIndex, 120, InvestorChart::getBank));  // 6개월
+        entity.setBankMa7m(calculateMA(charts, targetIndex, 140, InvestorChart::getBank));  // 7개월
+        entity.setBankMa8m(calculateMA(charts, targetIndex, 160, InvestorChart::getBank));  // 8개월
+        entity.setBankMa9m(calculateMA(charts, targetIndex, 180, InvestorChart::getBank));  // 9개월
+        entity.setBankMa10m(calculateMA(charts, targetIndex, 200, InvestorChart::getBank)); // 10개월
+        entity.setBankMa11m(calculateMA(charts, targetIndex, 220, InvestorChart::getBank)); // 11개월
+        entity.setBankMa12m(calculateMA(charts, targetIndex, 240, InvestorChart::getBank)); // 12개월
+    }
+
+    // 연기금 이동평균 설정
+    private void setPensionFundMa(StockInvestorMaEntity entity, List<InvestorChart> charts, int targetIndex) {
+        entity.setPenfndEtcMa5(calculateMA(charts, targetIndex, 5, InvestorChart::getPenfndEtc));
+        entity.setPenfndEtcMa10(calculateMA(charts, targetIndex, 10, InvestorChart::getPenfndEtc));
+        entity.setPenfndEtcMa20(calculateMA(charts, targetIndex, 20, InvestorChart::getPenfndEtc));
+        entity.setPenfndEtcMa30(calculateMA(charts, targetIndex, 30, InvestorChart::getPenfndEtc));
+        entity.setPenfndEtcMa40(calculateMA(charts, targetIndex, 40, InvestorChart::getPenfndEtc));
+        entity.setPenfndEtcMa50(calculateMA(charts, targetIndex, 50, InvestorChart::getPenfndEtc));
+        entity.setPenfndEtcMa60(calculateMA(charts, targetIndex, 60, InvestorChart::getPenfndEtc));
+        entity.setPenfndEtcMa90(calculateMA(charts, targetIndex, 90, InvestorChart::getPenfndEtc));
+        entity.setPenfndEtcMa1m(calculateMA(charts, targetIndex, 20, InvestorChart::getPenfndEtc));   // 1개월
+        entity.setPenfndEtcMa2m(calculateMA(charts, targetIndex, 40, InvestorChart::getPenfndEtc));   // 2개월
+        entity.setPenfndEtcMa3m(calculateMA(charts, targetIndex, 60, InvestorChart::getPenfndEtc));   // 3개월
+        entity.setPenfndEtcMa4m(calculateMA(charts, targetIndex, 80, InvestorChart::getPenfndEtc));   // 4개월
+        entity.setPenfndEtcMa5m(calculateMA(charts, targetIndex, 100, InvestorChart::getPenfndEtc));  // 5개월
+        entity.setPenfndEtcMa6m(calculateMA(charts, targetIndex, 120, InvestorChart::getPenfndEtc));  // 6개월
+        entity.setPenfndEtcMa7m(calculateMA(charts, targetIndex, 140, InvestorChart::getPenfndEtc));  // 7개월
+        entity.setPenfndEtcMa8m(calculateMA(charts, targetIndex, 160, InvestorChart::getPenfndEtc));  // 8개월
+        entity.setPenfndEtcMa9m(calculateMA(charts, targetIndex, 180, InvestorChart::getPenfndEtc));  // 9개월
+        entity.setPenfndEtcMa10m(calculateMA(charts, targetIndex, 200, InvestorChart::getPenfndEtc)); // 10개월
+        entity.setPenfndEtcMa11m(calculateMA(charts, targetIndex, 220, InvestorChart::getPenfndEtc)); // 11개월
+        entity.setPenfndEtcMa12m(calculateMA(charts, targetIndex, 240, InvestorChart::getPenfndEtc)); // 12개월
+    }
+
+    // 사모펀드 이동평균 설정
+    private void setPrivateEquityMa(StockInvestorMaEntity entity, List<InvestorChart> charts, int targetIndex) {
+        entity.setSamoFundMa5(calculateMA(charts, targetIndex, 5, InvestorChart::getSamoFund));
+        entity.setSamoFundMa10(calculateMA(charts, targetIndex, 10, InvestorChart::getSamoFund));
+        entity.setSamoFundMa20(calculateMA(charts, targetIndex, 20, InvestorChart::getSamoFund));
+        entity.setSamoFundMa30(calculateMA(charts, targetIndex, 30, InvestorChart::getSamoFund));
+        entity.setSamoFundMa40(calculateMA(charts, targetIndex, 40, InvestorChart::getSamoFund));
+        entity.setSamoFundMa50(calculateMA(charts, targetIndex, 50, InvestorChart::getSamoFund));
+        entity.setSamoFundMa60(calculateMA(charts, targetIndex, 60, InvestorChart::getSamoFund));
+        entity.setSamoFundMa90(calculateMA(charts, targetIndex, 90, InvestorChart::getSamoFund));
+        entity.setSamoFundMa1m(calculateMA(charts, targetIndex, 20, InvestorChart::getSamoFund));   // 1개월
+        entity.setSamoFundMa2m(calculateMA(charts, targetIndex, 40, InvestorChart::getSamoFund));   // 2개월
+        entity.setSamoFundMa3m(calculateMA(charts, targetIndex, 60, InvestorChart::getSamoFund));   // 3개월
+        entity.setSamoFundMa4m(calculateMA(charts, targetIndex, 80, InvestorChart::getSamoFund));   // 4개월
+        entity.setSamoFundMa5m(calculateMA(charts, targetIndex, 100, InvestorChart::getSamoFund));  // 5개월
+        entity.setSamoFundMa6m(calculateMA(charts, targetIndex, 120, InvestorChart::getSamoFund));  // 6개월
+        entity.setSamoFundMa7m(calculateMA(charts, targetIndex, 140, InvestorChart::getSamoFund));  // 7개월
+        entity.setSamoFundMa8m(calculateMA(charts, targetIndex, 160, InvestorChart::getSamoFund));  // 8개월
+        entity.setSamoFundMa9m(calculateMA(charts, targetIndex, 180, InvestorChart::getSamoFund));  // 9개월
+        entity.setSamoFundMa10m(calculateMA(charts, targetIndex, 200, InvestorChart::getSamoFund)); // 10개월
+        entity.setSamoFundMa11m(calculateMA(charts, targetIndex, 220, InvestorChart::getSamoFund)); // 11개월
+        entity.setSamoFundMa12m(calculateMA(charts, targetIndex, 240, InvestorChart::getSamoFund)); // 12개월
+    }
+
+    // 국가 이동평균 설정
+    private void setNationalMa(StockInvestorMaEntity entity, List<InvestorChart> charts, int targetIndex) {
+        entity.setNatnMa5(calculateMA(charts, targetIndex, 5, InvestorChart::getNatn));
+        entity.setNatnMa10(calculateMA(charts, targetIndex, 10, InvestorChart::getNatn));
+        entity.setNatnMa20(calculateMA(charts, targetIndex, 20, InvestorChart::getNatn));
+        entity.setNatnMa30(calculateMA(charts, targetIndex, 30, InvestorChart::getNatn));
+        entity.setNatnMa40(calculateMA(charts, targetIndex, 40, InvestorChart::getNatn));
+        entity.setNatnMa50(calculateMA(charts, targetIndex, 50, InvestorChart::getNatn));
+        entity.setNatnMa60(calculateMA(charts, targetIndex, 60, InvestorChart::getNatn));
+        entity.setNatnMa90(calculateMA(charts, targetIndex, 90, InvestorChart::getNatn));
+        entity.setNatnMa1m(calculateMA(charts, targetIndex, 20, InvestorChart::getNatn));   // 1개월
+        entity.setNatnMa2m(calculateMA(charts, targetIndex, 40, InvestorChart::getNatn));   // 2개월
+        entity.setNatnMa3m(calculateMA(charts, targetIndex, 60, InvestorChart::getNatn));   // 3개월
+        entity.setNatnMa4m(calculateMA(charts, targetIndex, 80, InvestorChart::getNatn));   // 4개월
+        entity.setNatnMa5m(calculateMA(charts, targetIndex, 100, InvestorChart::getNatn));  // 5개월
+        entity.setNatnMa6m(calculateMA(charts, targetIndex, 120, InvestorChart::getNatn));  // 6개월
+        entity.setNatnMa7m(calculateMA(charts, targetIndex, 140, InvestorChart::getNatn));  // 7개월
+        entity.setNatnMa8m(calculateMA(charts, targetIndex, 160, InvestorChart::getNatn));  // 8개월
+        entity.setNatnMa9m(calculateMA(charts, targetIndex, 180, InvestorChart::getNatn));  // 9개월
+        entity.setNatnMa10m(calculateMA(charts, targetIndex, 200, InvestorChart::getNatn)); // 10개월
+        entity.setNatnMa11m(calculateMA(charts, targetIndex, 220, InvestorChart::getNatn)); // 11개월
+        entity.setNatnMa12m(calculateMA(charts, targetIndex, 240, InvestorChart::getNatn)); // 12개월
+    }
+
+    // 기타법인 이동평균 설정
+    private void setEtcCorpMa(StockInvestorMaEntity entity, List<InvestorChart> charts, int targetIndex) {
+        entity.setEtcCorpMa5(calculateMA(charts, targetIndex, 5, InvestorChart::getEtcCorp));
+        entity.setEtcCorpMa10(calculateMA(charts, targetIndex, 10, InvestorChart::getEtcCorp));
+        entity.setEtcCorpMa20(calculateMA(charts, targetIndex, 20, InvestorChart::getEtcCorp));
+        entity.setEtcCorpMa30(calculateMA(charts, targetIndex, 30, InvestorChart::getEtcCorp));
+        entity.setEtcCorpMa40(calculateMA(charts, targetIndex, 40, InvestorChart::getEtcCorp));
+        entity.setEtcCorpMa50(calculateMA(charts, targetIndex, 50, InvestorChart::getEtcCorp));
+        entity.setEtcCorpMa60(calculateMA(charts, targetIndex, 60, InvestorChart::getEtcCorp));
+        entity.setEtcCorpMa90(calculateMA(charts, targetIndex, 90, InvestorChart::getEtcCorp));
+        entity.setEtcCorpMa1m(calculateMA(charts, targetIndex, 20, InvestorChart::getEtcCorp));   // 1개월
+        entity.setEtcCorpMa2m(calculateMA(charts, targetIndex, 40, InvestorChart::getEtcCorp));   // 2개월
+        entity.setEtcCorpMa3m(calculateMA(charts, targetIndex, 60, InvestorChart::getEtcCorp));   // 3개월
+        entity.setEtcCorpMa4m(calculateMA(charts, targetIndex, 80, InvestorChart::getEtcCorp));   // 4개월
+        entity.setEtcCorpMa5m(calculateMA(charts, targetIndex, 100, InvestorChart::getEtcCorp));  // 5개월
+        entity.setEtcCorpMa6m(calculateMA(charts, targetIndex, 120, InvestorChart::getEtcCorp));  // 6개월
+        entity.setEtcCorpMa7m(calculateMA(charts, targetIndex, 140, InvestorChart::getEtcCorp));  // 7개월
+        entity.setEtcCorpMa8m(calculateMA(charts, targetIndex, 160, InvestorChart::getEtcCorp));  // 8개월
+        entity.setEtcCorpMa9m(calculateMA(charts, targetIndex, 180, InvestorChart::getEtcCorp));  // 9개월
+        entity.setEtcCorpMa10m(calculateMA(charts, targetIndex, 200, InvestorChart::getEtcCorp)); // 10개월
+        entity.setEtcCorpMa11m(calculateMA(charts, targetIndex, 220, InvestorChart::getEtcCorp)); // 11개월
+        entity.setEtcCorpMa12m(calculateMA(charts, targetIndex, 240, InvestorChart::getEtcCorp)); // 12개월
+    }
+
+    // 내국인 이동평균 설정
+    private void setNationalForeignerMa(StockInvestorMaEntity entity, List<InvestorChart> charts, int targetIndex) {
+        entity.setNatforMa5(calculateMA(charts, targetIndex, 5, InvestorChart::getNatfor));
+        entity.setNatforMa10(calculateMA(charts, targetIndex, 10, InvestorChart::getNatfor));
+        entity.setNatforMa20(calculateMA(charts, targetIndex, 20, InvestorChart::getNatfor));
+        entity.setNatforMa30(calculateMA(charts, targetIndex, 30, InvestorChart::getNatfor));
+        entity.setNatforMa40(calculateMA(charts, targetIndex, 40, InvestorChart::getNatfor));
+        entity.setNatforMa50(calculateMA(charts, targetIndex, 50, InvestorChart::getNatfor));
+        entity.setNatforMa60(calculateMA(charts, targetIndex, 60, InvestorChart::getNatfor));
+        entity.setNatforMa90(calculateMA(charts, targetIndex, 90, InvestorChart::getNatfor));
+        entity.setNatforMa1m(calculateMA(charts, targetIndex, 20, InvestorChart::getNatfor));   // 1개월
+        entity.setNatforMa2m(calculateMA(charts, targetIndex, 40, InvestorChart::getNatfor));   // 2개월
+        entity.setNatforMa3m(calculateMA(charts, targetIndex, 60, InvestorChart::getNatfor));   // 3개월
+        entity.setNatforMa4m(calculateMA(charts, targetIndex, 80, InvestorChart::getNatfor));   // 4개월
+        entity.setNatforMa5m(calculateMA(charts, targetIndex, 100, InvestorChart::getNatfor));  // 5개월
+        entity.setNatforMa6m(calculateMA(charts, targetIndex, 120, InvestorChart::getNatfor));  // 6개월
+        entity.setNatforMa7m(calculateMA(charts, targetIndex, 140, InvestorChart::getNatfor));  // 7개월
+        entity.setNatforMa8m(calculateMA(charts, targetIndex, 160, InvestorChart::getNatfor));  // 8개월
+        entity.setNatforMa9m(calculateMA(charts, targetIndex, 180, InvestorChart::getNatfor));  // 9개월
+        entity.setNatforMa10m(calculateMA(charts, targetIndex, 200, InvestorChart::getNatfor)); // 10개월
+        entity.setNatforMa11m(calculateMA(charts, targetIndex, 220, InvestorChart::getNatfor)); // 11개월
+        entity.setNatforMa12m(calculateMA(charts, targetIndex, 240, InvestorChart::getNatfor)); // 12개월
+    }
+}

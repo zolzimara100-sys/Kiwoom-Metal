@@ -1,0 +1,262 @@
+# PRD-0012 이동평균값 확장 저장 기능 추가
+
+## 1. 개요
+**구분**: 기능개선, 변경
+**목적**: 개별 종목에 대한 투자자별 이동평균 기간을 확장하여 다양한 기간의 추세 분석을 가능하게 함
+
+## 2. 배경
+- 현재 개별 종목에 대해 5일, 10일, 20일, 60일 이동평균값만 저장 중
+- 중장기 투자 분석을 위해 더 다양한 기간의 이동평균값 필요
+- 기존 프로그램은 유지하고 신규 프로그램으로 확장 기능 구현
+
+## 3. 기능 요구사항
+
+### 3.1 이동평균 기간 확장
+**기존**: 5일, 10일, 20일, 60일
+**추가**: 30일, 40일, 50일, 90일, 120일, 140일
+**최종**: 5일, 10일, 20일, 30일, 40일, 50일, 60일, 90일, 120일, 140일
+
+### 3.2 데이터 소스
+- **입력 테이블**: `tb_stock_investor_chart`
+- 개별 종목별 투자자별 일별 순매수량 데이터 사용
+
+### 3.3 데이터 저장
+- **출력 테이블**: `tb_stock_investor_ma`
+- 기존 5일, 10일, 20일, 60일 데이터와 함께 저장
+- 신규 프로그램으로 구현하여 기존 로직 영향 없도록 분리
+
+## 4. 기술 사양
+
+### 4.1 데이터베이스 스키마 변경
+
+#### 4.1.1 테이블: `tb_stock_investor_ma`
+다음 컬럼들을 추가 (각 컬럼 타입: `NUMERIC(15)`):
+
+**1. 외국인 (frgnr_invsr - Foreign Investor)**
+- `frgnr_invsr_ma30` - 외국인 30일 이동평균
+- `frgnr_invsr_ma40` - 외국인 40일 이동평균
+- `frgnr_invsr_ma50` - 외국인 50일 이동평균
+- `frgnr_invsr_ma90` - 외국인 90일 이동평균
+- `frgnr_invsr_ma120` - 외국인 120일 이동평균
+- `frgnr_invsr_ma140` - 외국인 140일 이동평균
+
+// ... (동일 패턴으로 기관계, 금융투자, 보험 등 12개 투자자에 대해 적용)
+
+#### 4.1.2 추가 컬럼 총계
+- 투자자 유형: 12개
+- 각 유형별 추가 이동평균 기간: 6개 (ma30, ma40, ma50, ma90, ma120, ma140)
+- **총 추가 컬럼 수: 72개 (12 × 6)**
+
+### 4.2 컬럼 명명 규칙
+- 형식: `{투자자타입}_ma{기간}`
+- 일 단위: `ma30`, `ma40`, `ma50`, `ma90`, `ma120`, `ma140`
+
+### 4.3 이동평균 계산 로직
+
+#### 4.3.1 일 단위 이동평균 (30일, 40일, 50일, 90일)
+```
+MA(n일) = (최근 n거래일의 순매수량 합계) / n
+```
+
+#### 4.3.2 월 단위 이동평균 (1개월, 2개월, 3개월, 4개월, 5개월, 6개월, 7개월, 8개월, 9개월, 10개월, 11개월, 12개월)
+```
+거래일 기준 (1개월 ≈ 20거래일):
+- 1개월 ≈ 20거래일
+- 2개월 ≈ 40거래일
+- 3개월 ≈ 60거래일
+- 4개월 ≈ 80거래일
+- 5개월 ≈ 100거래일
+- 6개월 ≈ 120거래일
+- 7개월 ≈ 140거래일
+- 8개월 ≈ 160거래일
+- 9개월 ≈ 180거래일
+- 10개월 ≈ 200거래일
+- 11개월 ≈ 220거래일
+- 12개월 ≈ 240거래일
+
+MA(n개월) = (최근 n개월 거래일의 순매수량 합계) / (n개월의 거래일 수)
+```
+
+### 4.4 프로그램 구현 요구사항
+
+#### 4.4.1 신규 프로그램 개발
+- 기존 이동평균 계산 프로그램과 독립적으로 동작
+- 기존 프로그램 코드 변경 없이 신규로 구현
+- 기존 5일, 10일, 20일, 60일 + 신규 추가 기간 모두 계산
+
+#### 4.4.2 배치 처리
+- 일 단위 배치로 실행
+- 이전 거래일 데이터에 대한 이동평균 계산
+- 전체 개별 종목에 대해 일괄 처리
+
+#### 4.4.3 데이터 정합성
+- `tb_stock_investor_chart`에서 데이터 조회 시 거래일 순으로 정렬
+- 충분한 데이터가 없는 경우 (예: 신규 상장 종목) NULL 처리
+- 중복 데이터 방지를 위한 UPSERT 로직 구현
+
+## 5. 제약사항
+- 기존 이동평균 계산 프로그램은 변경하지 않음
+- 데이터 정합성 유지를 위해 트랜잭션 처리 필수
+- 배치 처리 시간은 시장 마감 후 수행
+
+## 6. 테스트 요구사항
+
+### 6.1 단위 테스트
+- 각 이동평균 기간별 계산 로직 정확성 검증
+- 경계 조건 테스트 (데이터 부족, NULL 처리 등)
+
+### 6.2 통합 테스트
+- 전체 종목에 대한 배치 처리 성공 여부
+- 기존 데이터와의 정합성 확인
+- 성능 테스트 (처리 시간 측정)
+
+### 6.3 검증 항목
+- 샘플 종목 선정하여 수기 계산값과 비교
+- 기존 5일, 10일, 20일, 60일 값이 유지되는지 확인
+- 신규 컬럼들이 정상적으로 저장되는지 확인
+
+## 7. 성공 기준
+- 모든 개별 종목에 대해 16개 추가 기간의 이동평균값 정상 저장 (일별 4개 + 월별 12개)
+- 기존 시스템 영향도 없음
+- 배치 처리 성공률 99% 이상
+- 계산 정확도 100%
+
+## 8. 향후 고려사항
+- 이동평균 차트 시각화 UI 개발
+- 실시간 이동평균 업데이트 기능
+- 추가 투자자 유형에 대한 확장성
+
+---
+
+## 9. 백엔드 구현 요구사항
+
+### 9.1 수정 대상 파일
+| 파일 경로 | 역할 | 수정 필요 |
+|-----------|------|----------|
+| `python-analysis/calculate_incremental_ma.py` | 이동평균 계산 핵심 스크립트 | ✅ 필수 |
+| `src/main/java/.../controller/StatisticsController.java` | API 호출 (Python 스크립트 실행) | ⚪ 변경 없음 |
+| `src/main/java/.../entity/StockInvestorMaEntity.java` | JPA Entity (신규 컬럼 필드 추가) | ✅ 필수 |
+
+### 9.2 `calculate_incremental_ma.py` 수정 명세
+
+#### 9.2.1 현재 코드 (Line 92)
+```python
+periods = [5, 10, 20, 60]
+```
+
+#### 9.2.2 변경 코드
+```python
+# 일 단위 및 월 단위 이동평균 기간 설정
+# (컬럼 접미사, 계산 윈도우 크기)
+PERIODS_CONFIG = [
+    # 기존
+    ('5', 5), ('10', 10), ('20', 20), ('60', 60),
+    # 신규 - 일 단위
+    ('30', 30), ('40', 40), ('50', 50), ('90', 90), ('120', 120), ('140', 140)
+    
+```
+
+#### 9.2.3 수정 필요 함수: `generate_incremental_ma_query()`
+
+**현재 로직 (Line 95-109):**
+```python
+ma_selects = []
+for src_col, target_prefix in investors:
+    for p in periods:
+        col_expr = f"""
+    CASE
+        WHEN row_idx >= {p} THEN ROUND(AVG({src_col}) OVER (...ROWS BETWEEN {p-1} PRECEDING AND CURRENT ROW), 2)
+        ELSE NULL
+    END AS {target_prefix}_ma{p}"""
+        ma_selects.append(col_expr)
+
+ma_columns = [f'{target}_ma{p}' for _, target in investors for p in periods]
+```
+
+**변경 로직:**
+```python
+ma_selects = []
+ma_columns = []
+
+for src_col, target_prefix in investors:
+    for suffix, window_size in PERIODS_CONFIG:
+        col_name = f'{target_prefix}_ma{suffix}'
+        col_expr = f"""
+    CASE
+        WHEN row_idx >= {window_size} THEN ROUND(AVG({src_col}) OVER (...ROWS BETWEEN {window_size-1} PRECEDING AND CURRENT ROW), 2)
+        ELSE NULL
+    END AS {col_name}"""
+        ma_selects.append(col_expr)
+        ma_columns.append(col_name)
+```
+
+**핵심 변경점:**
+1. `periods` 리스트 → `PERIODS_CONFIG` 튜플 리스트로 변경
+2. 컬럼명 생성 시 `ma{p}` → `ma{suffix}` 로 변경 (ma4m, ma6m 등 지원)
+3. 윈도우 크기는 `window_size` 변수로 분리
+
+### 9.3 Entity 수정 명세 (`StockInvestorMaEntity.java`)
+
+#### 9.3.1 신규 필드 추가 (각 투자자별 6개 필드)
+```java
+// 외국인 (frgnr_invsr) - 신규 6개
+@Column(name = "frgnr_invsr_ma30", precision = 15)
+private BigDecimal frgInvsrMa30;
+
+@Column(name = "frgnr_invsr_ma40", precision = 15)
+private BigDecimal frgInvsrMa40;
+
+// ... (ma50, ma90, ma120, ma140)
+
+// 기관계 (orgn) - 신규 6개
+@Column(name = "orgn_ma30", precision = 15)
+private BigDecimal orgnMa30;
+
+// ... 동일 패턴으로 12개 투자자 x 6개 기간 = 72개 필드
+```
+
+### 9.4 데이터 흐름 검증
+
+#### 9.4.1 예시: 외국인 6개월 이동평균 (`frgnr_invsr_ma120`)
+
+| 단계 | 설명 |
+|------|------|
+| 1 | `tb_stock_investor_chart`에서 해당 종목의 전체 일별 데이터 조회 |
+| 2 | `ROW_NUMBER()` 함수로 날짜 순서대로 `row_idx` 부여 (1부터 시작) |
+| 3 | `row_idx >= 120` 조건 확인 |
+| 4 | 조건 만족 시: 현재 행 포함 과거 120일 평균(`ROWS BETWEEN 119 PRECEDING AND CURRENT ROW`) 계산 |
+| 5 | 조건 불만족 시: NULL |
+| 6 | `tb_stock_investor_ma`에 `stk_cd`, `dt` 기준으로 UPSERT |
+
+#### 9.4.2 검증 쿼리 예시
+```sql
+-- 삼성전자(005930) 최근 ma120 값 검증
+SELECT dt, frgnr_invsr_ma120,
+       (SELECT ROUND(AVG(frgnr_invsr), 2)
+        FROM (SELECT frgnr_invsr FROM tb_stock_investor_chart
+              WHERE stk_cd = '005930' AND dt <= m.TO_DATE(dt, 'YYYYMMDD')
+              ORDER BY dt DESC LIMIT 120) sub) as manual_calc
+FROM tb_stock_investor_ma m
+WHERE stk_cd = '005930'
+ORDER BY dt DESC
+LIMIT 5;
+```
+
+### 9.5 배치 실행 영향도
+
+| 항목 | 기존 | 변경 후 |
+|------|------|---------|
+| 계산 기간 수 | 4개 | 10개 (기존 4 + 신규 6) |
+| 투자자 유형 수 | 12개 | 12개 (변경 없음) |
+| 종목당 컬럼 수 | 48개 (12x4) | 120개 (12x10) |
+| 예상 처리 시간 | ~30분 | ~45분 (약 1.5배 증가 예상) |
+
+### 9.6 롤백 계획
+문제 발생 시 원복:
+```sql
+-- 신규 컬럼 데이터만 초기화 (컬럼 유지)
+UPDATE tb_stock_investor_ma SET
+    frgnr_invsr_ma30 = NULL, frgnr_invsr_ma40 = NULL, ...
+    -- 신규 72개 컬럼 초기화
+;
+```

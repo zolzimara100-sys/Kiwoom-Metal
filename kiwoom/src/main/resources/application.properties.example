@@ -1,0 +1,15 @@
+spring.application.name=kiwoom
+
+# Kiwoom API Configuration  
+kiwoom.api.base-url=https://api.kiwoom.com
+kiwoom.api.auth-url=https://api.kiwoom.com
+kiwoom.api.app-key=YOUR_APP_KEY_HERE
+kiwoom.api.app-secret=YOUR_APP_SECRET_HERE
+kiwoom.api.account-number=YOUR_ACCOUNT_NUMBER
+
+# Server Configuration
+server.port=8080
+
+# Logging
+logging.level.com.stocktrading.kiwoom=DEBUG
+logging.level.org.springframework.web=INFO

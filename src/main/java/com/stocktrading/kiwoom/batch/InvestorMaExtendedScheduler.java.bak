@@ -1,0 +1,94 @@
+package com.stocktrading.kiwoom.batch;
+
+import java.time.LocalDate;
+import java.util.List;
+
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Component;
+
+import com.stocktrading.kiwoom.domain.port.out.StockListPort;
+
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+
+/**
+ * PRD-0012: 이동평균값 확장 저장 기능 스케줄러
+ *
+ * 장 마감 후 자동으로 이동평균 계산
+ */
+@Slf4j
+@Component
+@RequiredArgsConstructor
+@ConditionalOnProperty(
+    prefix = "batch.investor-ma-extended",
+    name = "enabled",
+    havingValue = "true",
+    matchIfMissing = false
+)
+public class InvestorMaExtendedScheduler {
+
+    private final InvestorMaExtendedBatchService batchService;
+    private final StockListPort stockListPort;
+
+    /**
+     * 일별 이동평균 계산 (장 마감 후)
+     * 평일 17:00에 실행 (데이터 수신 완료 후)
+     */
+    @Scheduled(cron = "${batch.investor-ma-extended.cron:0 0 17 * * MON-FRI}")
+    public void calculateDailyMovingAverages() {
+        log.info("=== 일별 확장 이동평균 계산 시작 ===");
+
+        try {
+            // 전일 날짜 (이동평균 계산 대상)
+            LocalDate targetDate = LocalDate.now().minusDays(1);
+
+            // 전체 종목 리스트 조회
+            List<String> stockCodes = stockListPort.findAllStockCodes();
+
+            log.info("이동평균 계산 대상: {} 종목, 날짜: {}", stockCodes.size(), targetDate);
+
+            // 일괄 계산 실행
+            batchService.calculateAndSaveForMultipleStocks(stockCodes, targetDate);
+
+            log.info("=== 일별 확장 이동평균 계산 완료 ===");
+
+        } catch (Exception e) {
+            log.error("일별 이동평균 계산 실패", e);
+            throw e;
+        }
+    }
+
+    /**
+     * 과거 데이터 재계산 (수동 트리거용 - 실행 비활성화)
+     * 필요시 application.yml에서 활성화
+     */
+    @Scheduled(cron = "${batch.investor-ma-extended.backfill-cron:0 0 0 1 1 ?}")  // 기본값: 실행 안함
+    public void backfillHistoricalData() {
+        log.info("=== 과거 데이터 재계산 시작 ===");
+
+        try {
+            // 재계산 기간 설정 (예: 최근 1년)
+            LocalDate endDate = LocalDate.now().minusDays(1);
+            LocalDate startDate = endDate.minusYears(1);
+
+            List<String> stockCodes = stockListPort.findAllStockCodes();
+
+            log.info("재계산 대상: {} 종목, 기간: {} ~ {}", stockCodes.size(), startDate, endDate);
+
+            // 날짜별로 순회하며 계산
+            LocalDate currentDate = startDate;
+            while (!currentDate.isAfter(endDate)) {
+                log.info("재계산 진행 중: {}", currentDate);
+                batchService.calculateAndSaveForMultipleStocks(stockCodes, currentDate);
+                currentDate = currentDate.plusDays(1);
+            }
+
+            log.info("=== 과거 데이터 재계산 완료 ===");
+
+        } catch (Exception e) {
+            log.error("과거 데이터 재계산 실패", e);
+            throw e;
+        }
+    }
+}

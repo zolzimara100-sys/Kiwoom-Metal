@@ -1,0 +1,132 @@
+REQ-003 
+목적 : tb_stock_investor_sector_ma sector별 일별 거래대금 기반 이동평균값 개발.(누적거래대금이 아님)
+구분 : 신규, API 개발
+입력 기준날짜 :
+참고사항 :
+개발 내용 :
+
+[개발구조방향]
+
+섹터별 이동평균 계산 class개발.
+입력값 :  sector_cd,ma시작일,ma종료일을 입력받아 해당 sector에 속한 종목들의 일별 투자자 거래대금을 합산하여
+각 투자자별로 일별 거래대금 기반 이동평균값을 계산하여 tb_stock_investor_sector_ma 테이블에 저장하는 API 개발.
+
+[Class내 이동평균을 위한 로직 ]
+step 1 
+ 입력받은 sector_cd을 기준으로 tb_stock_list_meta.detail = sector_cd and tb_stock_list_meta.main ="SECTOR" 에서 종목코드 목록가져와서
+   Map에 저장.(개발선택사항)
+
+Step 2: 
+Map에 저장된(개발선택사항)
+종목들의 각 투자자 별로 일별 거래대금 계산
+종목 일별 투자자 거래대금 = tb_stock_investor_chart.cur_prc * tb_stock_investor_chart.{투자자별 순매수량} 
+(순매도량은 컬럼값에 음수가 들어가 있음으로 그대로 곱하면 됨)
+
+
+업종별-투자자-투자금액 이동평균(ma5 ~ ma140) 계산 API 호출 방법.
+⏺ 현재 실행 중인 API 엔드포인트와 파라미터는 다음과 같습니다:
+
+  API 엔드포인트:
+  POST http://localhost:8081/api/v1/sector-ma/batch/run-period
+
+  파라미터:
+
+  1. startDate (선택, 기본값: 2000-01-02)
+    - 형식: yyyyMMdd
+    - 예: 20000102, 20200101
+    - 시작 날짜
+  2. endDate (선택, 기본값: 어제)
+    - 형식: yyyyMMdd
+    - 예: 20251219, 20231231
+    - 종료 날짜
+
+  사용 예시:
+
+  # 1. 전체 기간 (기본값 사용)
+  curl -X POST "http://localhost:8081/api/v1/sector-ma/batch/run-period"
+
+  # 2. 전체 기간 명시
+  curl -X POST "http://localhost:8081/api/v1/sector-ma/batch/run-period?startDate=20000102&endDate=20251219"
+
+  # 3. 특정 기간만
+  curl -X POST "http://localhost:8081/api/v1/sector-ma/batch/run-period?startDate=20200101&endDate=20201231"
+
+  # 4. 시작일만 지정
+  curl -X POST "http://localhost:8081/api/v1/sector-ma/batch/run-period?startDate=20200101"
+
+  # 5. 종료일만 지정
+  curl -X POST "http://localhost:8081/api/v1/sector-ma/batch/run-period?endDate=20201231"
+
+  현재 실행 중인 명령:
+  curl -X POST "http://localhost:8081/api/v1/sector-ma/batch/run-period?startDate=20000102&endDate=20251219"
+
+  파라미터 없이 호출하면 기본값으로 2000-01-02부터 어제까지 처리됩니다.
+
+
+
+
+
+
+특정 Sector_cd에 종목이 추가되었을 경우 전체 ma작업을 다시 하는 것이 아니라 해당 sector_cd에 대해서만 ma작업을 수행하는 API도 별도로 개발.
+새로운 종목이 섹터에 추가될 때 해당 섹터만 재계산하는 API가 필요합니다.
+
+  요구사항 분석
+
+  시나리오:
+  - 특정 섹터(sector_cd)에 새로운 종목이 추가됨
+  - 해당 섹터의 2000-01-02 ~ 현재까지 모든 MA 값을 재계산 필요
+  - 다른 섹터는 영향받지 않아야 함
+
+  고려사항 (기존 오류 경험):
+  1. ✅ NULL 처리: COALESCE 사용
+  2. ✅ 데이터베이스 연결 타임아웃 방지: 개별 트랜잭션 처리
+  3. ✅ 거래일 기반 정확한 계산
+  4. ✅ 에러 발생시 부분 처리된 데이터 보존
+
+  API 설계:
+
+  POST /api/v1/sector-ma/batch/run-sector-period
+  파라미터:
+  - sectorCd: 섹터 코드 (필수)
+  - startDate: 시작일 (선택, 기본: 2000-01-02)
+  - endDate: 종료일 (선택, 기본: 어제)
+
+
+
+
+[특정sector_cd에 대한 ma계산 API 개발 완료]
+⏺ 배포 완료 및 테스트 성공
+
+  새로운 섹터별 개별 처리 API가 성공적으로 배포되고 테스트되었습니다.
+
+  테스트 결과
+
+  curl -X POST "http://localhost:8081/api/v1/sector-ma/batch/run-sector-period?sectorCd=ai_infra&startDate=202
+  51215&endDate=20251219"
+
+  # 응답: 섹터 'ai_infra' 기간 배치 실행 완료: 2025-12-15 ~ 2025-12-19 (총 5일)
+
+  로그 확인
+
+  처리 기간: 2025-12-15 ~ 2025-12-19
+  처리 일수: 5 일
+  성공: 5 건
+  실패: 0 건
+
+  사용 가능한 API
+
+  1. 특정 섹터만 재계산 (새로 추가)
+  # 전체 기간 (2000-01-02 ~ 어제)
+  POST /api/v1/sector-ma/batch/run-sector-period?sectorCd=ai_infra
+
+  # 특정 기간
+  POST /api/v1/sector-ma/batch/run-sector-period?sectorCd=semicon&startDate=20240101&endDate=20241231
+
+  2. 전체 섹터 재계산 (기존)
+  # 특정 날짜
+  POST /api/v1/sector-ma/batch/run?date=20251219
+
+  # 전체 기간
+  POST /api/v1/sector-ma/batch/run-period?startDate=20000102&endDate=20251219
+
+  섹터에 새로운 종목이 추가되었을 때는 첫 번째 API를 사용하면 됩니다.

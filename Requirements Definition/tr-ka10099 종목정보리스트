@@ -1,0 +1,156 @@
+TR명 ka10099	종목정보 리스트
+
+request Header
+Element	/한글명	    type	   Required	    Length	Description
+authorization	접근토큰	String	Y	1000	토큰 지정시 토큰타입("Bearer") 붙혀서 호출 예) Bearer Egicyx...
+cont-yn	연속조회여부	String	N	1	응답 Header의 연속조회여부값이 Y일 경우 다음데이터 요청시 응답 Header의 cont-yn값 세팅
+next-key	연속조회키	String	N	50	응답 Header의 연속조회여부값이 Y일 경우 다음데이터 요청시 응답 Header의 next-key값 세팅
+api-id	TR명	String	Y	10	
+
+request Body
+mrkt_tp	시장구분	String	Y	2	0:코스피,10:코스닥,3:ELW,8:ETF,30:K-OTC,50:코넥스,5:신주인수권,4:뮤추얼펀드,6:리츠,9:하이일드
+
+response header
+Element	한글명	type	Required	Length	Description
+cont-yn	연속조회여부	String	N	1	다음 데이터가 있을시 Y값 전달
+next-key	연속조회키	String	N	50	다음 데이터가 있을시 다음 키값 전달
+api-id	TR명	String	Y	10	
+
+response body
+Element	한글명	type	Required	Length	Description
+list	종목리스트	LIST	N		
+- code	종목코드	String	N	20	단축코드
+- name	종목명	String	N	40	
+- listCount	상장주식수	String	N	20	
+- auditInfo	감리구분	String	N	20	
+- regDay	상장일	String	N	20	
+- lastPrice	전일종가	String	N	20	
+- state	종목상태	String	N	20	
+- marketCode	시장구분코드	String	N	20	
+- marketName	시장명	String	N	20	
+- upName	업종명	String	N	20	
+- upSizeName	회사크기분류	String	N	20	
+- companyClassName	회사분류	String	N	20	코스닥만 존재함
+- orderWarning	투자유의종목여부	String	N	20	0: 해당없음, 2: 정리매매, 3: 단기과열, 4: 투자위험, 5: 투자경과, 1: ETF투자주의요망(ETF인 경우만 전달
+- nxtEnable	NXT가능여부	String	N	20	Y: 가능
+
+[요구사항  ]
+make table , table name is tb_stock_list
+컬럼명은 위에 response Body를 참고해서 code 부터 nxtEnable 까지 참고해서 만들어줘.
+CREATE TABLE tb_stock_list (
+    code VARCHAR(20) NOT NULL,
+    name VARCHAR(40),
+    listCount BIGINT,
+    auditInfo VARCHAR(20),
+    regDay VARCHAR(20),
+    lastPrice BIGINT,
+    state VARCHAR(20),
+    marketCode VARCHAR(20),
+    marketName VARCHAR(20),
+    upName VARCHAR(20),
+    upSizeName VARCHAR(20),
+    companyClassName VARCHAR(20),
+    orderWarning VARCHAR(20),
+    nxtEnable VARCHAR(20),
+    PRIMARY KEY (code)
+);
+
+1.이것과 관련된 database table , kiwoom server로 request 및 response 맏아 정보를 database에 저장하는 프로그램을 만들어줘
+2. 프로그램은 기존 kiwoom에 요청하는 request header , request body 그리고 그것을 database처리하는 프로그램을 참고. 
+3. 모든 정보는 datalist에 모두 저장한다음에 한번에 table에 입력해줘. table에 입력하기 전에 기존에 있던 모든 정보는 삭제하고 새로 입력해줘. master성 테이블임.
+4. 화면은 별도로 마들지 않을 것임. 호출만으로 자동 실행되도록 해줘. 
+5.response Body의 값은 0으로 고정해줘. 
+
+
+
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.util.Scanner;
+import java.util.Arrays;
+
+
+
+프로그램 예제
+request header
+
+// 종목정보 리스트
+public class Main {
+	public static void fn_ka10099(String token, String jsonData){
+		fn_ka10099(token, jsonData, "N", "");
+	}
+	public static void fn_ka10099(String token, String jsonData, String contYn, String nextKey) {
+		try {
+			// 1. 요청할 API URL
+			// String host = "https://mockapi.kiwoom.com"; // 모의투자
+			String host = "https://api.kiwoom.com"; // 실전투자
+			String endpoint = "/api/dostk/stkinfo";
+			String urlString = host + endpoint;
+
+			URL url = new URL(urlString);
+			HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+
+			// 2. Header 데이터 설정
+			connection.setRequestMethod("POST"); // 메서드 타입
+			connection.setRequestProperty("Content-Type", "application/json;charset=UTF-8"); // 컨텐츠타입
+			connection.setRequestProperty("authorization", "Bearer " + token); // 접근토큰
+			connection.setRequestProperty("cont-yn", contYn == null? "N": contYn); // 연속조회여부
+			connection.setRequestProperty("next-key", nextKey == null? "": nextKey); // 연속조회키
+			connection.setRequestProperty("api-id", "ka10099"); // TR명
+			connection.setDoOutput(true);
+
+			// 3. JSON 데이터 전송
+			try (OutputStream os = connection.getOutputStream()) {
+				byte[] input = jsonData.getBytes("utf-8");
+				os.write(input, 0, input.length);
+			}
+
+			// 4. 응답 헤더 출력
+			System.out.println("Code: "+ connection.getResponseCode());
+			System.out.println("Header:");
+			String[] headerKeys = {"cont-yn","next-key","api-id"};
+			connection.getHeaderFields().forEach((key, value) -> {
+				if(Arrays.asList(headerKeys).contains(key)){
+					System.out.println("    " + key + ": " + value.get(0));
+				}
+			});
+
+			// 5. 응답 본문 출력
+			System.out.println("Body:");
+			try (Scanner scanner = new Scanner(connection.getInputStream(), "utf-8")) {
+				String responseBody = scanner.useDelimiter("\\A").next();
+				System.out.println("    " + responseBody);
+			}
+
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+	}
+
+	public static void main(String[] args) {
+		// 1. 토큰 설정
+		String MY_ACCESS_TOKEN = "사용자 AccessToken";
+
+		// 2. 요청 데이터 JSON 문자열 생성
+		String jsonData = "{\"mrkt_tp\" : \"0\"}"; // JSON 형식의 문자열 데이터
+
+		// 3. API 실행
+		fn_ka10099(MY_ACCESS_TOKEN, jsonData);
+
+		// next-key, cont-yn 값이 있을 경우
+		// fn_ka10099(MY_ACCESS_TOKEN, jsonData, "Y", "nextkey..");
+	}
+}
+
+request.
+{
+	"mrkt_tp" : "0"
+}
+
+호출 기본 정보
+Method	POST
+운영 도메인	https://api.kiwoom.com
+모의투자 도메인	https://mockapi.kiwoom.com(KRX만 지원가능)
+URL	/api/dostk/stkinfo
+Format	JSON
+Content-Type	application/json;charset=UTF-8

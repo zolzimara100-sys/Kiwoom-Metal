@@ -1,0 +1,27 @@
+
+TR명 ka10059 투자자별 거래내역
+
+
+투자자별 거래내역(ka10059)에 대한 장기조회에 대한 제약사항
+
+kiwoom 서버에서 조회한 데이터를 java program내에서 보관하고 있다가 PostgreSQL에 한건식 insert한다. 
+이때 java program내에서 보관하는 데이터가 너무 많아지면 OutOfMemoryError가 발생할 수 있다.
+따라서 장기조회시에는 일정 건수 단위로 PostgreSQL에 insert하고 java program내에서 보관하는 데이터는 비우는 작업을 반복해야 한다.
+따라서 30건 단위로 java에서 보관한 데이터를 PostgreSQL에 insert하고 java program내에서 보관하는 데이터를 비우는 작업을 반복하도록 한다.
+예를 들어 java프로그램에서 보관하는  데이터가 30건이 넘으면 PostgreSQL에 insert하고 java program내에서 보관하는 데이터는 매번 비우도록 한다.
+그리고 요청한 나머지 일자의 데이터를 다시 kiwoom  서버에 30번 요청해서 받는다.
+이 작업을 수행하지 않으면 java program내에서 보관하는 데이터가 너무 많아져서 OutOfMemoryError가 발생할 수 있다.
+이를 반영하여 ka10059 장기조회 프로그램을 수정한다. 
+
+
+
+
+ [요구사항]
+우선순위 2: Batch Processing (일괄 처리) ⭐⭐⭐
+메모리에는 30건 단위로 데이터를 보관하고 PostgreSQL에 insert하는 작업을 반복하도록 한다.
+오류 발생시 로그에 기록하고 insert 작업을 멈추지 않고 계속 진행하도록 한다.
+
+우선순위 3: 연속조회 루프 안전장치 ⭐⭐
+  "API 연속조회(pagination)가 무한 반복되지 않도록 제한하는 안전장치"
+  redis는 향후에 PostgreSQL를 사용하지 않는 실시간 정보를 기록하기 위한 용도임. 따라서 본 요구사항에서는 redis를 사용할일이 없음.
+  너의 제안대로 구현해줘.

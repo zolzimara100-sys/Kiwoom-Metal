@@ -1,0 +1,39 @@
+name: Docker Run Container
+
+on:
+  workflow_dispatch:
+    inputs:
+      port:
+        description: 'Port to run container on'
+        required: false
+        default: '8080'
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Build Docker image
+      run: docker build -t kiwoom-app .
+      
+    - name: Run Docker container
+      run: |
+        docker run -d \
+          --name kiwoom-container \
+          -p ${{ github.event.inputs.port }}:8080 \
+          kiwoom-app
+        
+    - name: Wait for application to start
+      run: sleep 10
+      
+    - name: Check container status
+      run: |
+        docker ps
+        docker logs kiwoom-container
+        
+    - name: Test health endpoint
+      run: |
+        curl http://localhost:${{ github.event.inputs.port }}/api/kiwoom/health || true

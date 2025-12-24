@@ -1,0 +1,222 @@
+기본 정보					
+Method	POST				
+운영 도메인	https://api.kiwoom.com				
+모의투자 도메인	https://mockapi.kiwoom.com(KRX만 지원가능)				
+URL	/api/dostk/chart				
+Format	JSON				
+Content-Type	application/json;charset=UTF-8				
+
+TR명 ka10060	종목별투자기관별차트요청
+
+[2025-11-28 Data 수신 기준에 대한 요구사항 변경]
+요구사항 변경 내역:
+Request Body의 "dt (일자, String, Y, 8, YYYYMMDD)"에 대한 설명
+   - Kiwoom server는 Request 요청 날짜(dt)로부터 과거 100일간의 데이터를 전송한다.
+
+화면 및 프로그램 변경사항
+1. 화면: KA10060 데이터 수집
+   항목명: API 요청 설정
+
+   (1) 종목코드 입력 기능
+       - 종목코드를 입력하면 Database에서 해당 종목의 최근 날짜와 가장 오래된 날짜를 조회한다.
+       - 조회된 날짜를 '시작날짜'와 '종료날짜'로 표시한다.
+
+   (2) 날짜 범위 설정
+       - 날짜 입력 필드 위에 '데이터 범위'라는 라벨을 표시한다.
+       - '종료날짜'는 Database에서 조회된 '최근날짜'로 자동 세팅한다.
+       - 사용자가 '시작날짜(from)'와 '종료날짜(to)'를 직접 변경할 수 있도록 한다.
+
+   (3) 데이터 가져오기 버튼 변경
+       - 기존 버튼 삭제: 1주일, 1개월, 3개월, 6개월, 전체 버튼
+       - 신규 추가:
+         * "현재까지 가져오기" 버튼: 오늘 날짜까지의 데이터를 수집
+         * 년도 선택 캘린더: 특정 년도를 선택할 수 있는 캘린더 UI
+         * "선택 년도까지 가져오기" 버튼: 선택한 년도의 마지막 날까지 데이터를 수집
+
+   
+
+
+
+
+request					
+Header					
+Element	한글명	type	Required	Length	Description
+authorization	접근토큰	String	Y	1000	"토큰 지정시 토큰타입(""Bearer"") 붙혀서 호출
+예) Bearer Egicyx..."
+cont-yn	연속조회여부	String	N	1	응답 Header의 연속조회여부값이 Y일 경우 다음데이터 요청시 응답 Header의 cont-yn값 세팅
+next-key	연속조회키	String	N	50	응답 Header의 연속조회여부값이 Y일 경우 다음데이터 요청시 응답 Header의 next-key값 세팅
+api-id	TR명	String	Y	10	
+
+request
+Body					
+Element	한글명	type	Required	Length	Description
+t	일자	String	Y	8	YYYYMMDDd
+stk_cd	종목코드	String	Y	20	"거래소별 종목코드
+(KRX:039490,NXT:039490_NX,SOR:039490_AL)"
+amt_qty_tp	금액수량구분	String	Y	1	1:금액, 2:수량(default)
+trde_tp	매매구분	String	Y	1	0:순매수(default), 1:매수, 2:매도
+unit_tp	단위구분	String	Y	4	1000:천주, 1:단주 (default)
+
+response					
+Header					
+Element	한글명	type	Required	Length	Description
+cont-yn	연속조회여부	String	N	1	다음 데이터가 있을시 Y값 전달
+next-key	연속조회키	String	N	50	다음 데이터가 있을시 다음 키값 전달
+api-id	TR명	String	Y	10	
+					
+response					
+Body					
+Element	한글명	type	Required	Length	Description
+stk_invsr_orgn_chart	종목별투자자기관별차트	LIST	N		
+- dt	일자	String	N	20	
+- cur_prc	현재가	String	N	20	
+- pred_pre	전일대비	String	N	20	
+- acc_trde_prica	누적거래대금	String	N	20	
+- ind_invsr	개인투자자	String	N	20	
+- frgnr_invsr	외국인투자자	String	N	20	
+- orgn	기관계	String	N	20	
+- fnnc_invt	금융투자	String	N	20	
+- insrnc	보험	String	N	20	
+- invtrt	투신	String	N	20	
+- etc_fnnc	기타금융	String	N	20	
+- bank	은행	String	N	20	
+- penfnd_etc	연기금등	String	N	20	
+- samo_fund	사모펀드	String	N	20	
+- natn	국가	String	N	20	
+- etc_corp	기타법인	String	N	20	
+- natfor	내외국인	String	N	20	
+
+
+프로그램 예제. 
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.util.Scanner;
+import java.util.Arrays;
+
+// 종목별투자자기관별차트요청
+public class Main {
+	public static void fn_ka10060(String token, String jsonData){
+		fn_ka10060(token, jsonData, "N", "");
+	}
+	public static void fn_ka10060(String token, String jsonData, String contYn, String nextKey) {
+		try {
+			// 1. 요청할 API URL
+			// String host = "https://mockapi.kiwoom.com"; // 모의투자
+			String host = "https://api.kiwoom.com"; // 실전투자
+			String endpoint = "/api/dostk/chart";
+			String urlString = host + endpoint;
+
+			URL url = new URL(urlString);
+			HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+
+			// 2. Header 데이터 설정
+			connection.setRequestMethod("POST"); // 메서드 타입
+			connection.setRequestProperty("Content-Type", "application/json;charset=UTF-8"); // 컨텐츠타입
+			connection.setRequestProperty("authorization", "Bearer " + token); // 접근토큰
+			connection.setRequestProperty("cont-yn", contYn == null? "N": contYn); // 연속조회여부
+			connection.setRequestProperty("next-key", nextKey == null? "": nextKey); // 연속조회키
+			connection.setRequestProperty("api-id", "ka10060"); // TR명
+			connection.setDoOutput(true);
+
+			// 3. JSON 데이터 전송
+			try (OutputStream os = connection.getOutputStream()) {
+				byte[] input = jsonData.getBytes("utf-8");
+				os.write(input, 0, input.length);
+			}
+
+			// 4. 응답 헤더 출력
+			System.out.println("Code: "+ connection.getResponseCode());
+			System.out.println("Header:");
+			String[] headerKeys = {"cont-yn","next-key","api-id"};
+			connection.getHeaderFields().forEach((key, value) -> {
+				if(Arrays.asList(headerKeys).contains(key)){
+					System.out.println("    " + key + ": " + value.get(0));
+				}
+			});
+
+			// 5. 응답 본문 출력
+			System.out.println("Body:");
+			try (Scanner scanner = new Scanner(connection.getInputStream(), "utf-8")) {
+				String responseBody = scanner.useDelimiter("\\A").next();
+				System.out.println("    " + responseBody);
+			}
+
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+	}
+
+	public static void main(String[] args) {
+		// 1. 토큰 설정
+		String MY_ACCESS_TOKEN = "사용자 AccessToken";
+
+		// 2. 요청 데이터 JSON 문자열 생성
+		String jsonData = "{\"dt\" : \"20241107\",\"stk_cd\" : \"005930\",\"amt_qty_tp\" : \"1\",\"trde_tp\" : \"0\",\"unit_tp\" : \"1000\"}"; // JSON 형식의 문자열 데이터
+
+		// 3. API 실행
+		fn_ka10060(MY_ACCESS_TOKEN, jsonData);
+
+		// next-key, cont-yn 값이 있을 경우
+		// fn_ka10060(MY_ACCESS_TOKEN, jsonData, "Y", "nextkey..");
+	}
+}
+
+
+request.
+{
+	"dt" : "20241107",
+	"stk_cd" : "005930",
+	"amt_qty_tp" : "1",
+	"trde_tp" : "0",
+	"unit_tp" : "1000"
+}
+
+
+response
+{
+	"stk_invsr_orgn_chart":
+		[
+			{
+				"dt":"20241107",
+				"cur_prc":"+61300",
+				"pred_pre":"+4000",
+				"acc_trde_prica":"1105968",
+				"ind_invsr":"1584",
+				"frgnr_invsr":"-61779",
+				"orgn":"60195",
+				"fnnc_invt":"25514",
+				"insrnc":"0",
+				"invtrt":"0",
+				"etc_fnnc":"34619",
+				"bank":"4",
+				"penfnd_etc":"-1",
+				"samo_fund":"58",
+				"natn":"0",
+				"etc_corp":"0",
+				"natfor":"1"
+			},
+			{
+				"dt":"20241106",
+				"cur_prc":"+74800",
+				"pred_pre":"+17200",
+				"acc_trde_prica":"448203",
+				"ind_invsr":"-639",
+				"frgnr_invsr":"-7",
+				"orgn":"646",
+				"fnnc_invt":"-47",
+				"insrnc":"15",
+				"invtrt":"-2",
+				"etc_fnnc":"730",
+				"bank":"-51",
+				"penfnd_etc":"1",
+				"samo_fund":"0",
+				"natn":"0",
+				"etc_corp":"0",
+				"natfor":"0"
+			}
+		],
+	"return_code":0,
+	"return_msg":"정상적으로 처리되었습니다"
+}
+

@@ -1,0 +1,22 @@
+{
+    "folders": [
+		{
+			"name": "kiwoom",
+			"path": "../.."
+		},
+		{
+			"name": "frontend",
+			"path": "../../../../../../../../frontend"
+		},
+		{
+			"name": "Requirements Definition",
+			"path": "../../../../../../../../Requirements Definition"
+		},
+		{
+			"path": "../../../../../../../../python-analysis"
+		}
+	],
+    "settings": {
+        "java.project.sourcePaths": []
+    }
+}
