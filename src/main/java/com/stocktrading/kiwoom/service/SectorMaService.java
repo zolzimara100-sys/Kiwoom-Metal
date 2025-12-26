@@ -421,4 +421,287 @@ public class SectorMaService {
             return SectorMaResponse.AllSectorMaChartResponse.error("조회 실패: " + e.getMessage());
         }
     }
+
+    /**
+     * 섹터 투자자별 이동평균 비중 계산
+     */
+    @Transactional(readOnly = true)
+    public com.stocktrading.kiwoom.controller.StatisticsController.InvestorRatioMaResponse getSectorInvestorRatioMa(
+            String sectorCd, int period, String fromDate, String toDate) {
+
+        log.info("섹터 투자자 비중 계산: sectorCd={}, period={}, from={}, to={}", sectorCd, period, fromDate, toDate);
+
+        // 섹터 이동평균 데이터 조회
+        List<StockInvestorSectorMaEntity> data = sectorMaRepository.findBySectorCdAndDtBetween(
+            sectorCd, fromDate, toDate);
+
+        if (data.isEmpty()) {
+            return com.stocktrading.kiwoom.controller.StatisticsController.InvestorRatioMaResponse.builder()
+                .stkCd(sectorCd)
+                .period(period)
+                .fromDate(fromDate)
+                .toDate(toDate)
+                .dataCount(0)
+                .message("데이터가 없습니다.")
+                .build();
+        }
+
+        // 투자자별 이동평균값 abs 합계 계산
+        Map<String, java.math.BigDecimal> volumeMap = new HashMap<>();
+        String[] investors = { "frgnr", "orgn", "fnncInvt", "insrnc", "invtrt", "bank",
+                "etcFnnc", "penfndEtc", "samoFund", "etcCorp", "natn", "natfor" };
+
+        for (String inv : investors) {
+            volumeMap.put(inv, java.math.BigDecimal.ZERO);
+        }
+
+        // 각 row에서 선택된 기간의 MA값 추출하여 누적
+        for (StockInvestorSectorMaEntity row : data) {
+            java.math.BigDecimal frgnrMa = getSectorMaValue(row, "frgnr", period);
+            if (frgnrMa != null) volumeMap.put("frgnr", volumeMap.get("frgnr").add(frgnrMa.abs()));
+
+            java.math.BigDecimal orgnMa = getSectorMaValue(row, "orgn", period);
+            if (orgnMa != null) volumeMap.put("orgn", volumeMap.get("orgn").add(orgnMa.abs()));
+
+            java.math.BigDecimal fnncInvtMa = getSectorMaValue(row, "fnncInvt", period);
+            if (fnncInvtMa != null) volumeMap.put("fnncInvt", volumeMap.get("fnncInvt").add(fnncInvtMa.abs()));
+
+            java.math.BigDecimal insrncMa = getSectorMaValue(row, "insrnc", period);
+            if (insrncMa != null) volumeMap.put("insrnc", volumeMap.get("insrnc").add(insrncMa.abs()));
+
+            java.math.BigDecimal invtrtMa = getSectorMaValue(row, "invtrt", period);
+            if (invtrtMa != null) volumeMap.put("invtrt", volumeMap.get("invtrt").add(invtrtMa.abs()));
+
+            java.math.BigDecimal bankMa = getSectorMaValue(row, "bank", period);
+            if (bankMa != null) volumeMap.put("bank", volumeMap.get("bank").add(bankMa.abs()));
+
+            java.math.BigDecimal etcFnncMa = getSectorMaValue(row, "etcFnnc", period);
+            if (etcFnncMa != null) volumeMap.put("etcFnnc", volumeMap.get("etcFnnc").add(etcFnncMa.abs()));
+
+            java.math.BigDecimal penfndEtcMa = getSectorMaValue(row, "penfndEtc", period);
+            if (penfndEtcMa != null) volumeMap.put("penfndEtc", volumeMap.get("penfndEtc").add(penfndEtcMa.abs()));
+
+            java.math.BigDecimal samoFundMa = getSectorMaValue(row, "samoFund", period);
+            if (samoFundMa != null) volumeMap.put("samoFund", volumeMap.get("samoFund").add(samoFundMa.abs()));
+
+            java.math.BigDecimal etcCorpMa = getSectorMaValue(row, "etcCorp", period);
+            if (etcCorpMa != null) volumeMap.put("etcCorp", volumeMap.get("etcCorp").add(etcCorpMa.abs()));
+
+            java.math.BigDecimal natnMa = getSectorMaValue(row, "natn", period);
+            if (natnMa != null) volumeMap.put("natn", volumeMap.get("natn").add(natnMa.abs()));
+
+            java.math.BigDecimal natforMa = getSectorMaValue(row, "natfor", period);
+            if (natforMa != null) volumeMap.put("natfor", volumeMap.get("natfor").add(natforMa.abs()));
+        }
+
+        // 전체 합계 계산
+        java.math.BigDecimal totalVolume = volumeMap.values().stream()
+            .reduce(java.math.BigDecimal.ZERO, java.math.BigDecimal::add);
+
+        if (totalVolume.compareTo(java.math.BigDecimal.ZERO) == 0) {
+            return com.stocktrading.kiwoom.controller.StatisticsController.InvestorRatioMaResponse.builder()
+                .stkCd(sectorCd)
+                .period(period)
+                .fromDate(fromDate)
+                .toDate(toDate)
+                .dataCount(data.size())
+                .message("거래량 합계가 0입니다.")
+                .build();
+        }
+
+        // 비율 계산 (%)
+        Map<String, java.math.BigDecimal> ratioMap = new HashMap<>();
+        for (String inv : investors) {
+            java.math.BigDecimal ratio = volumeMap.get(inv)
+                .divide(totalVolume, 4, java.math.RoundingMode.HALF_UP)
+                .multiply(java.math.BigDecimal.valueOf(100));
+            ratioMap.put(inv, ratio);
+        }
+
+        return com.stocktrading.kiwoom.controller.StatisticsController.InvestorRatioMaResponse.builder()
+            .stkCd(sectorCd)
+            .period(period)
+            .fromDate(fromDate)
+            .toDate(toDate)
+            .dataCount(data.size())
+            .frgnr(ratioMap.get("frgnr"))
+            .orgn(ratioMap.get("orgn"))
+            .fnncInvt(ratioMap.get("fnncInvt"))
+            .insrnc(ratioMap.get("insrnc"))
+            .invtrt(ratioMap.get("invtrt"))
+            .bank(ratioMap.get("bank"))
+            .etcFnnc(ratioMap.get("etcFnnc"))
+            .penfndEtc(ratioMap.get("penfndEtc"))
+            .samoFund(ratioMap.get("samoFund"))
+            .etcCorp(ratioMap.get("etcCorp"))
+            .natn(ratioMap.get("natn"))
+            .natfor(ratioMap.get("natfor"))
+            .message("조회 성공")
+            .build();
+    }
+
+    /**
+     * 섹터 Entity에서 투자자별 기간별 MA값 추출
+     */
+    private java.math.BigDecimal getSectorMaValue(StockInvestorSectorMaEntity entity, String investor, int period) {
+        return switch (investor) {
+            case "frgnr" -> switch (period) {
+                case 5 -> entity.getFrgnrInvsrMa5();
+                case 10 -> entity.getFrgnrInvsrMa10();
+                case 20 -> entity.getFrgnrInvsrMa20();
+                case 30 -> entity.getFrgnrInvsrMa30();
+                case 40 -> entity.getFrgnrInvsrMa40();
+                case 50 -> entity.getFrgnrInvsrMa50();
+                case 60 -> entity.getFrgnrInvsrMa60();
+                case 90 -> entity.getFrgnrInvsrMa90();
+                case 120 -> entity.getFrgnrInvsrMa120();
+                case 140 -> entity.getFrgnrInvsrMa140();
+                default -> null;
+            };
+            case "orgn" -> switch (period) {
+                case 5 -> entity.getOrgnMa5();
+                case 10 -> entity.getOrgnMa10();
+                case 20 -> entity.getOrgnMa20();
+                case 30 -> entity.getOrgnMa30();
+                case 40 -> entity.getOrgnMa40();
+                case 50 -> entity.getOrgnMa50();
+                case 60 -> entity.getOrgnMa60();
+                case 90 -> entity.getOrgnMa90();
+                case 120 -> entity.getOrgnMa120();
+                case 140 -> entity.getOrgnMa140();
+                default -> null;
+            };
+            case "fnncInvt" -> switch (period) {
+                case 5 -> entity.getFnncInvtMa5();
+                case 10 -> entity.getFnncInvtMa10();
+                case 20 -> entity.getFnncInvtMa20();
+                case 30 -> entity.getFnncInvtMa30();
+                case 40 -> entity.getFnncInvtMa40();
+                case 50 -> entity.getFnncInvtMa50();
+                case 60 -> entity.getFnncInvtMa60();
+                case 90 -> entity.getFnncInvtMa90();
+                case 120 -> entity.getFnncInvtMa120();
+                case 140 -> entity.getFnncInvtMa140();
+                default -> null;
+            };
+            case "insrnc" -> switch (period) {
+                case 5 -> entity.getInsrncMa5();
+                case 10 -> entity.getInsrncMa10();
+                case 20 -> entity.getInsrncMa20();
+                case 30 -> entity.getInsrncMa30();
+                case 40 -> entity.getInsrncMa40();
+                case 50 -> entity.getInsrncMa50();
+                case 60 -> entity.getInsrncMa60();
+                case 90 -> entity.getInsrncMa90();
+                case 120 -> entity.getInsrncMa120();
+                case 140 -> entity.getInsrncMa140();
+                default -> null;
+            };
+            case "invtrt" -> switch (period) {
+                case 5 -> entity.getInvtrtMa5();
+                case 10 -> entity.getInvtrtMa10();
+                case 20 -> entity.getInvtrtMa20();
+                case 30 -> entity.getInvtrtMa30();
+                case 40 -> entity.getInvtrtMa40();
+                case 50 -> entity.getInvtrtMa50();
+                case 60 -> entity.getInvtrtMa60();
+                case 90 -> entity.getInvtrtMa90();
+                case 120 -> entity.getInvtrtMa120();
+                case 140 -> entity.getInvtrtMa140();
+                default -> null;
+            };
+            case "bank" -> switch (period) {
+                case 5 -> entity.getBankMa5();
+                case 10 -> entity.getBankMa10();
+                case 20 -> entity.getBankMa20();
+                case 30 -> entity.getBankMa30();
+                case 40 -> entity.getBankMa40();
+                case 50 -> entity.getBankMa50();
+                case 60 -> entity.getBankMa60();
+                case 90 -> entity.getBankMa90();
+                case 120 -> entity.getBankMa120();
+                case 140 -> entity.getBankMa140();
+                default -> null;
+            };
+            case "etcFnnc" -> switch (period) {
+                case 5 -> entity.getEtcFnncMa5();
+                case 10 -> entity.getEtcFnncMa10();
+                case 20 -> entity.getEtcFnncMa20();
+                case 30 -> entity.getEtcFnncMa30();
+                case 40 -> entity.getEtcFnncMa40();
+                case 50 -> entity.getEtcFnncMa50();
+                case 60 -> entity.getEtcFnncMa60();
+                case 90 -> entity.getEtcFnncMa90();
+                case 120 -> entity.getEtcFnncMa120();
+                case 140 -> entity.getEtcFnncMa140();
+                default -> null;
+            };
+            case "penfndEtc" -> switch (period) {
+                case 5 -> entity.getPenfndEtcMa5();
+                case 10 -> entity.getPenfndEtcMa10();
+                case 20 -> entity.getPenfndEtcMa20();
+                case 30 -> entity.getPenfndEtcMa30();
+                case 40 -> entity.getPenfndEtcMa40();
+                case 50 -> entity.getPenfndEtcMa50();
+                case 60 -> entity.getPenfndEtcMa60();
+                case 90 -> entity.getPenfndEtcMa90();
+                case 120 -> entity.getPenfndEtcMa120();
+                case 140 -> entity.getPenfndEtcMa140();
+                default -> null;
+            };
+            case "samoFund" -> switch (period) {
+                case 5 -> entity.getSamoFundMa5();
+                case 10 -> entity.getSamoFundMa10();
+                case 20 -> entity.getSamoFundMa20();
+                case 30 -> entity.getSamoFundMa30();
+                case 40 -> entity.getSamoFundMa40();
+                case 50 -> entity.getSamoFundMa50();
+                case 60 -> entity.getSamoFundMa60();
+                case 90 -> entity.getSamoFundMa90();
+                case 120 -> entity.getSamoFundMa120();
+                case 140 -> entity.getSamoFundMa140();
+                default -> null;
+            };
+            case "etcCorp" -> switch (period) {
+                case 5 -> entity.getEtcCorpMa5();
+                case 10 -> entity.getEtcCorpMa10();
+                case 20 -> entity.getEtcCorpMa20();
+                case 30 -> entity.getEtcCorpMa30();
+                case 40 -> entity.getEtcCorpMa40();
+                case 50 -> entity.getEtcCorpMa50();
+                case 60 -> entity.getEtcCorpMa60();
+                case 90 -> entity.getEtcCorpMa90();
+                case 120 -> entity.getEtcCorpMa120();
+                case 140 -> entity.getEtcCorpMa140();
+                default -> null;
+            };
+            case "natn" -> switch (period) {
+                case 5 -> entity.getNatnMa5();
+                case 10 -> entity.getNatnMa10();
+                case 20 -> entity.getNatnMa20();
+                case 30 -> entity.getNatnMa30();
+                case 40 -> entity.getNatnMa40();
+                case 50 -> entity.getNatnMa50();
+                case 60 -> entity.getNatnMa60();
+                case 90 -> entity.getNatnMa90();
+                case 120 -> entity.getNatnMa120();
+                case 140 -> entity.getNatnMa140();
+                default -> null;
+            };
+            case "natfor" -> switch (period) {
+                case 5 -> entity.getNatforMa5();
+                case 10 -> entity.getNatforMa10();
+                case 20 -> entity.getNatforMa20();
+                case 30 -> entity.getNatforMa30();
+                case 40 -> entity.getNatforMa40();
+                case 50 -> entity.getNatforMa50();
+                case 60 -> entity.getNatforMa60();
+                case 90 -> entity.getNatforMa90();
+                case 120 -> entity.getNatforMa120();
+                case 140 -> entity.getNatforMa140();
+                default -> null;
+            };
+            default -> null;
+        };
+    }
 }

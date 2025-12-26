@@ -185,6 +185,57 @@ public class SectorMaController {
     }
 
     /**
+     * 섹터 투자자별 이동평균 비중 조회
+     * GET /api/v1/sector-ma/investor-ratio-ma/{sectorCd}
+     *
+     * @param sectorCd 섹터 코드
+     * @param period 이동평균 기간 (기본: 20)
+     * @param fromDate 시작일 (YYYYMMDD or YYYY-MM-DD)
+     * @param toDate 종료일 (YYYYMMDD or YYYY-MM-DD)
+     * @return 투자자별 비중 데이터
+     */
+    @GetMapping("/investor-ratio-ma/{sectorCd}")
+    public ResponseEntity<StatisticsController.InvestorRatioMaResponse> getSectorInvestorRatioMa(
+            @PathVariable String sectorCd,
+            @RequestParam(defaultValue = "20") int period,
+            @RequestParam(required = false) String fromDate,
+            @RequestParam(required = false) String toDate) {
+
+        log.info("섹터 투자자별 이동평균 비중 조회: 섹터코드={}, 기간=MA{}, from={}, to={}",
+                sectorCd, period, fromDate, toDate);
+
+        try {
+            // fromDate, toDate 필수 체크
+            if (fromDate == null || toDate == null) {
+                return ResponseEntity.badRequest().body(StatisticsController.InvestorRatioMaResponse.builder()
+                        .stkCd(sectorCd)
+                        .period(period)
+                        .message("fromDate와 toDate는 필수입니다.")
+                        .build());
+            }
+
+            // 날짜 형식 정규화
+            String actualFromDate = fromDate.replace("-", "");
+            String actualToDate = toDate.replace("-", "");
+
+            // 섹터 이동평균 비중 계산 (Service에 위임)
+            StatisticsController.InvestorRatioMaResponse response =
+                sectorMaService.getSectorInvestorRatioMa(sectorCd, period, actualFromDate, actualToDate);
+
+            return ResponseEntity.ok(response);
+
+        } catch (Exception e) {
+            log.error("섹터 투자자 비중 조회 실패 - 섹터: {}, 오류: {}", sectorCd, e.getMessage(), e);
+            return ResponseEntity.status(500)
+                .body(StatisticsController.InvestorRatioMaResponse.builder()
+                    .stkCd(sectorCd)
+                    .period(period)
+                    .message("조회 실패: " + e.getMessage())
+                    .build());
+        }
+    }
+
+    /**
      * 배치 수동 실행 (테스트용)
      * POST /api/v1/sector-ma/batch/run
      *

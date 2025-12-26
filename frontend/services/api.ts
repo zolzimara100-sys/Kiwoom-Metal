@@ -673,5 +673,17 @@ export const sectorMaApi = {
     return apiRequest<AllSectorsMaChartResponse>(
       `/api/v1/sector-ma/chart/all?${query}`
     );
+  },
+
+  /**
+   * 섹터 투자자별 이동평균 기반 비중 조회
+   */
+  async getInvestorRatioMa(sectorCd: string, period: number = 20, fromDate?: string, toDate?: string) {
+    let query = `period=${period}`;
+    if (fromDate) query += `&fromDate=${fromDate}`;
+    if (toDate) query += `&toDate=${toDate}`;
+    return apiRequest<InvestorRatioMaResponse>(
+      `/api/v1/sector-ma/investor-ratio-ma/${sectorCd}?${query}`
+    );
   }
 };

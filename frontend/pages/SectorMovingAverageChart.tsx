@@ -311,10 +311,18 @@ const SectorMovingAverageChart: React.FC<Props> = ({ sectorCd: propSectorCd }) =
 
 
     // 시리즈만 업데이트 (재생성하지 않음)
-    const updateSeriesData = useCallback(() => {
+    const updateSeriesData = useCallback((preserveViewport = false) => {
         if (!chartRef.current || allDataRef.current.length === 0) return;
 
-        console.log(`[updateSeriesData] 데이터 업데이트 - 총 ${allDataRef.current.length}개 데이터`);
+        console.log(`[updateSeriesData] 데이터 업데이트 - 총 ${allDataRef.current.length}개 데이터, preserveViewport=${preserveViewport}`);
+
+        // 뷰포트 보존이 필요한 경우 현재 범위 저장
+        let savedRange = null;
+        const timeScale = chartRef.current.timeScale();
+        if (preserveViewport && timeScale) {
+            savedRange = timeScale.getVisibleRange();
+            console.log('[updateSeriesData] 뷰포트 저장:', savedRange);
+        }
 
         // 기존 시리즈에 데이터만 업데이트
         seriesMapRef.current.forEach((series, investorKey) => {
@@ -326,6 +334,16 @@ const SectorMovingAverageChart: React.FC<Props> = ({ sectorCd: propSectorCd }) =
                 console.error(`시리즈 데이터 업데이트 실패[${investorKey}]: `, e);
             }
         });
+
+        // 뷰포트 복원 (데이터 업데이트 직후)
+        if (preserveViewport && savedRange && timeScale) {
+            try {
+                timeScale.setVisibleRange(savedRange);
+                console.log('[updateSeriesData] 뷰포트 즉시 복원 완료');
+            } catch (e) {
+                console.error('[updateSeriesData] 뷰포트 복원 실패:', e);
+            }
+        }
     }, [prepareSeriesData]);
 
     // 시리즈 생성/제거 (투자자 선택 변경 시)
@@ -481,6 +499,38 @@ const SectorMovingAverageChart: React.FC<Props> = ({ sectorCd: propSectorCd }) =
 
                 console.log(`[fetchChartData] 데이터 로드 완료: ${data.data.length} 건(${data.data[0].dt} ~${data.data[data.data.length - 1].dt})`);
 
+                // REQ-007: 투자자별 거래 비중 계산 (1년간 투자비중)
+                try {
+                    const totalDataLength = data.data.length;
+                    const visibleDays = MA_VISIBLE_DAYS[period]; // 250, 375, 500
+                    const startIndex = Math.max(0, totalDataLength - visibleDays);
+                    const fromDate = data.data[startIndex].dt; // 표시 시작 날짜
+                    const toDate = data.data[totalDataLength - 1].dt; // 최신 날짜
+
+                    console.log(`[투자자 비중 계산] MA${period}, 범위: ${fromDate}~${toDate} (${totalDataLength - startIndex}일)`);
+
+                    const ratioRes = await sectorMaApi.getInvestorRatioMa(targetSector, period, fromDate, toDate);
+                    if (ratioRes.data) {
+                        setInvestorRatios({
+                            frgnr: ratioRes.data.frgnr || 0,
+                            orgn: ratioRes.data.orgn || 0,
+                            fnnc_invt: ratioRes.data.fnncInvt || 0,
+                            insrnc: ratioRes.data.insrnc || 0,
+                            invtrt: ratioRes.data.invtrt || 0,
+                            etc_fnnc: ratioRes.data.etcFnnc || 0,
+                            bank: ratioRes.data.bank || 0,
+                            penfnd_etc: ratioRes.data.penfndEtc || 0,
+                            samo_fund: ratioRes.data.samoFund || 0,
+                            natn: ratioRes.data.natn || 0,
+                            etc_corp: ratioRes.data.etcCorp || 0,
+                            natfor: ratioRes.data.natfor || 0,
+                        });
+                        console.log(`[투자자 비중 결과] MA${period}, 외국인: ${ratioRes.data.frgnr}%, 기관계: ${ratioRes.data.orgn}%`);
+                    }
+                } catch (e) {
+                    console.warn('투자자 비중 조회 실패:', e);
+                }
+
                 // 종목 시리즈 참조를 먼저 초기화
                 stockSeriesRef.current = null;
 
@@ -586,15 +636,19 @@ const SectorMovingAverageChart: React.FC<Props> = ({ sectorCd: propSectorCd }) =
                         setAllSectorsData({ sectors: updatedSectors });
                         displayAllSectorsData({ sectors: updatedSectors });
 
-                        // 시간 범위 복원
-                        if (timeScale && currentTimeRange) {
-                            try {
-                                timeScale.setVisibleRange(currentTimeRange);
-                                console.log('[loadMoreData] 업종전체 모드 - 화면 범위 복원 완료');
-                            } catch (e) {
-                                console.warn('시간 범위 복원 실패:', e);
-                            }
-                        }
+                        // 시간 범위 복원 - Double RAF 패턴
+                        requestAnimationFrame(() => {
+                            requestAnimationFrame(() => {
+                                if (timeScale && currentTimeRange) {
+                                    try {
+                                        timeScale.setVisibleRange(currentTimeRange);
+                                        console.log('[loadMoreData] 업종전체 모드 - 화면 범위 복원 완료');
+                                    } catch (e) {
+                                        console.warn('시간 범위 복원 실패:', e);
+                                    }
+                                }
+                            });
+                        });
                     } else {
                         console.log('[loadMoreData] 업종전체 모드 - 새로운 데이터 없음');
                         hasMoreRef.current = false;
@@ -646,22 +700,12 @@ const SectorMovingAverageChart: React.FC<Props> = ({ sectorCd: propSectorCd }) =
 
                     console.log(`[loadMoreData] ${newData.length}개 데이터 추가 (${oldLength} → ${allDataRef.current.length})`);
 
-                    // 기존 시리즈에 데이터만 업데이트 (시리즈 재생성 X)
-                    updateSeriesData();
+                    // 기존 시리즈에 데이터만 업데이트 (preserveViewport=true로 뷰포트 유지)
+                    updateSeriesData(true);
 
                     // 종목이 선택되어 있으면 종목 데이터도 추가 로드
                     if (selectedStock) {
                         await loadMoreStockData(selectedStock.code);
-                    }
-
-                    // 시간 범위 복원 (뷰포트 유지) - 날짜 기반으로 복원하여 화면 고정
-                    if (timeScale && currentTimeRange) {
-                        try {
-                            timeScale.setVisibleRange(currentTimeRange);
-                            console.log('[loadMoreData] 화면 범위 복원 완료 - 화면 위치 유지됨');
-                        } catch (e) {
-                            console.warn('시간 범위 복원 실패:', e);
-                        }
                     }
                 } else {
                     console.log('[loadMoreData] 중복 데이터만 있음 - 더 이상 로드 없음');
@@ -1476,6 +1520,11 @@ const SectorMovingAverageChart: React.FC<Props> = ({ sectorCd: propSectorCd }) =
                                     업종전체
                                 </button>
                             </div>
+                        </div>
+
+                        {/* 투자자 비중 차트 헤더 */}
+                        <div className="flex items-center gap-2 mt-3 mb-1">
+                            <span className="text-sm font-semibold text-gray-700">1년간 투자비중</span>
                         </div>
 
                         {/* 투자자 토글 버튼 - 높이 확대 (REQ-007 UI 통일) */}
